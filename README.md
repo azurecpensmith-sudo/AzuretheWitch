@@ -1,29 +1,27 @@
-# Character Continuity v5.0 Open Beta
+# Character Continuity v5.0.1 Open Beta
 
-## Simple Creator Guide
+## Staggered Focus and Persistence — Creator Guide
 
-Character Continuity helps an AI portray recurring NPCs consistently while still allowing them to react, change, remember important events, and develop relationships over a long adventure.
+Character Continuity helps an AI portray recurring NPCs consistently while allowing lasting decisions, relationships, memories, and development to survive across a long adventure.
 
-This is an open beta. It has automated coverage but still needs testing in real adventures, models, and creator setups. Use it first in a test scenario or a copy of an adventure you can afford to troubleshoot. Back up important cards before installing or updating it.
+v5.0.1 removes stored Temporary State. Current feelings, thoughts, goals, and tensions are inferred naturally from the Core cards, current input, Recent Story, AI Instructions, Author's Note, and durable continuity already in context. The script no longer asks the model to maintain a separate short-lived State record.
 
-> **Compatibility:** Character Continuity requires the Context modifier. It does not work with cached models or optimized context. Turn those features off before testing it.
+This is an open beta. Test it first in a copy of an adventure and back up important cards before updating.
+
+> **Compatibility:** Character Continuity requires the Context modifier. Cached models and optimized context are unsupported.
 
 ## Quick setup
 
-1. Add the Character Continuity v5.0 script as a Library.
-2. Connect it to the Input, Context, and Output modifiers once each.
-3. Create one `CC CORE: Full Name` Story Card for every NPC you want the script to manage.
-4. Optionally create a `CC PLAYER` card and the extra creator cards described below.
-5. Start the adventure. The script creates its configuration, status, State, continuity, relationship, memory, and Turning Point cards automatically.
-6. Open `Configure Character Continuity` and choose the mode and limits you want.
+1. Add the Character Continuity v5.0.1 script as a Library.
+2. Connect it once to each Input, Context, and Output modifier.
+3. Create one `CC CORE: Full Name` Story Card for every managed NPC.
+4. Optionally create `CC PLAYER`, `CC VOICE`, `CC MOTIVES`, and `CC BOUNDARIES` cards.
+5. Start the adventure. The script creates its configuration, status, continuity, relationship, memory, and Turning Point cards.
+6. Adjust significance and configuration only if the defaults do not fit your cast.
 
-Do not copy the full Library into all three modifiers. If your scenario package already connects the Library to the modifiers, do not add a second set of calls.
-
-The project's official repository provides the current beta, dated release history, known limitations, and reporting instructions.
+Do not paste the complete script into all three modifiers. If a scenario package already connects it, do not add a second set of calls.
 
 ### Modifier calls
-
-If you need to connect the Library manually, use one wrapper in each modifier.
 
 Input modifier:
 
@@ -54,64 +52,96 @@ modifier(text);
 
 ## Registering an NPC
 
-Create a Story Card whose title is exactly:
+Create a Story Card titled exactly:
 
 ```text
 CC CORE: Full Name
 ```
 
-Example:
+Recommended format:
 
 ```text
 Aliases: Nickname, formal title
 Pronouns: she/her
+Significance: 3
 Identity: A concise physical or social identity.
 Core: The character's stable nature and defining principles.
 Personality: A few durable personality traits.
-Relational disposition: How she generally approaches trust, affection, intimacy, commitment, and conflict.
-Protected traits: Qualities that ordinary story events should not casually erase.
+Relational disposition: How she generally approaches trust, affection, commitment, and conflict.
+Protected traits: Qualities ordinary story events should not casually erase.
 ```
 
-Only the correctly titled Core card is required. The fields above are recommended, not mandatory. Keep them concise and describe durable characterization rather than the current scene.
+Only the correctly titled Core card is required. Keep it concise and describe durable characterization rather than the current scene.
 
-Use `Enabled: false` inside an NPC's Core card if you temporarily want that NPC ignored.
+`Significance` accepts `1` through `5` and defaults to `3`:
 
-Leave ordinary Story Card trigger keys blank for CC cards. The script discovers them by title and selects relevant information itself.
+| Value | Suggested use |
+|---:|---|
+| `5` | Central companion, rival, or major recurring character |
+| `4` | Important recurring character |
+| `3` | Regular supporting character |
+| `2` | Minor recurring character |
+| `1` | Background or occasional character |
+
+Significance breaks scheduling ties; it cannot make an off-scene NPC active. A directly involved lower-significance NPC takes priority over a higher-significance NPC elsewhere.
+
+Use `Enabled: false` to ignore an NPC temporarily. Leave ordinary Story Card trigger keys blank for CC cards because the script discovers them by title.
 
 ## Player identity
 
-The optional `CC PLAYER` card helps the script protect player control and use the correct grammar.
+The optional `CC PLAYER` card helps preserve player control and grammar:
 
 ```text
 Name: Azure
 Pronouns: she/her/her/hers/herself
 ```
 
-Common two-part pronouns such as `she/her`, `he/him`, and `they/them` are expanded automatically. Five forms are useful for custom pronouns.
-
-Creator cards can use placeholders such as `{{player.name}}`, `{{player.subject}}`, `{{player.object}}`, `{{player.possessive_adjective}}`, `{{player.possessive_pronoun}}`, and `{{player.reflexive}}`.
+Common two-part forms such as `she/her`, `he/him`, and `they/them` expand automatically. Creator cards may use `{{player.name}}`, `{{player.subject}}`, `{{player.object}}`, `{{player.possessive_adjective}}`, `{{player.possessive_pronoun}}`, and `{{player.reflexive}}`.
 
 ## Optional creator cards
 
-These cards use the same exact NPC name as the Core card:
+Use the exact NPC name from the Core card:
 
-- `CC VOICE: Full Name` — speech style, vocabulary, rhythm, and mannerisms.
-- `CC MOTIVES: Full Name` — durable needs, priorities, fears, and ambitions.
+- `CC VOICE: Full Name` — speech style, rhythm, vocabulary, and mannerisms.
+- `CC MOTIVES: Full Name` — durable needs, fears, priorities, and ambitions.
 - `CC BOUNDARIES: Full Name` — creator-defined limits, consent rules, and relationship boundaries.
 
-Write these as ordinary creator guidance. The script selects one relevant anchor when context space permits.
+The script selects one relevant anchor for the focused NPC when context space permits.
 
-## Choosing a mode
+## How staggered focus works
 
-| Mode | What it does | Suggested output length |
-|---|---|---:|
-| `story-first` | Uses Core and existing continuity for portrayal but never asks the model to generate temporary State. | 100+ tokens |
-| `balanced` | Requests a State opportunity only when the newest generated story contains a likely reaction, decision, goal, or tension cue for the focused NPC. | 130+ tokens |
-| `full-package` | Makes every feature available and offers a State opportunity on every eligible generation. | 150+ tokens |
+The script can recognize up to five scene-active NPCs in one response. Scene presence is inferred from the current player input, Recent Story, and brief scene carryover. A clear time jump resets that carryover.
 
-`story-first` is the safest starting point. Try `balanced` when you want temporary reactions without asking for them constantly. Use `full-package` when continuity matters more than minimizing output overhead.
+For each response, the script:
 
-Balanced mode uses a conservative text cue rather than full semantic understanding. It may occasionally miss unusually phrased reactions or offer an unnecessary update. An offered update is optional; no change is stored unless the completed story supports it.
+1. Identifies the registered NPCs currently involved in the scene.
+2. Ranks direct involvement and current or recent presence first.
+3. Uses `Significance` to prioritize a crowded active cast.
+4. Chooses one focus NPC, preferring direct involvement and then the least recently served eligible NPC.
+5. Supplies compact Core identity for every active NPC and deeper relevant continuity for only the focus NPC.
+
+This keeps multiple NPCs distinct without showing the model several deep continuity packets in one response.
+
+A player action and Continue each count as a story turn. Retry replaces the same position, repeats the same focus, restores the earlier evidence window, and cannot receive or apply a continuity update. It does not add evidence or consume the review cooldown.
+
+## Current reactions and durable change
+
+There is no `CC STATE` card or State output task in v5.0.1. Current reactions remain ordinary story facts. The model sees the same live sources it already uses for portrayal and infers the NPC's present state from them.
+
+Durable persistence is deliberately slower:
+
+1. **Observe:** A completed response focused on an NPC is saved as that NPC's generated-story evidence.
+2. **Accumulate:** Later focused responses build the same owner's small evidence window.
+3. **Review:** Once the owner has enough observations, a review waits until that NPC is focused again and the global review cooldown is clear.
+4. **Reset:** Whether the review stores a change or finds none, that owner's reviewed window resets.
+
+Only one owner can be reviewed in a response. If several owners are ready, each waits for a later focus turn. After a delivered review, the default cooldown guarantees at least one successful prose-only turn before another review.
+
+Recent Story is not copied into the continuity packet. During a mature review, the script supplies only older owner evidence that is not already present in Recent Story. Evidence accumulation itself produces no metadata and uses no output tokens.
+
+A durable review may ask the model for one short final `CC5` record after complete story prose. The record is optional: no record is the correct result when the story establishes no lasting change. The Output modifier removes valid, rejected, or malformed terminal records before prose enters history.
+
+Player input alone is never evidence. The generated story must support the durable change. Brief emotions and immediate intentions remain in live story context rather than becoming permanent continuity.
 
 ## Configuration card
 
@@ -119,98 +149,101 @@ The script creates `Configure Character Continuity`. Edit values after the colon
 
 | Setting | Meaning |
 |---|---|
-| `Enabled` | `false` completely disables injection and updates while preserving existing cards. |
-| `Mode` | `story-first`, `balanced`, or `full-package`. |
-| `Context ceiling` | Maximum estimated tokens the continuity packet, update task, and reserve may use. Default: `1400`. |
-| `State lifetime` | Visible generations before temporary State expires. Default: `3`. Continue generations count toward this lifetime. |
-| `Durable review interval` | Genuine post-grace player inputs between durable reviews. Default: `3`. Continue does not advance it. |
-| `Low-output behavior` | Chooses what happens when the detected output allowance is below the mode recommendation. |
+| `Enabled` | `false` disables injection and updates while preserving cards. |
+| `Context ceiling` | Maximum estimated tokens used by the continuity packet and an optional review task. Default: `1400`. |
+| `Durable observations before review` | Focused completed responses required for an owner to mature. Default: `2`. |
+| `Prose-only turns after review` | Successful turns required before another owner may review. Default: `1`. |
 | `Turning Points` | `growth-only`, `all-directions`, or `disabled`. |
-| `Maximum active NPCs` | Maximum registered NPCs included in one generation. Default: `2`. |
+| `Maximum active NPCs` | Maximum scene-present NPCs included in one response. Default and maximum: `5`. |
 | `Debug` | Creates an additional diagnostics card when `true`. |
 
-Low-output choices:
+The context ceiling controls Character Continuity's injection, not the model's total context window. Optional details are omitted before essential active-NPC identity. If a mature review cannot fit safely, it is deferred and the story proceeds without the task.
 
-- `protect-story` defers temporary State so the model has more room for prose.
-- `prefer-state` requests State despite the smaller output allowance.
-- `warn-only` requests State and adds a warning to the status card.
-
-The context ceiling controls Character Continuity's own injection, not the model's total context window. If NPC identities do not fit, increase the ceiling. If the script feels too expensive, lower it and let optional memories and supporting details be omitted first.
-
-## Temporary State and durable continuity
-
-Temporary State records an NPC's current feeling, thought, goal, or tension. A valid update begins influencing the following response, never the response already being generated. State expires automatically, and an explicit time jump clears old State before a new post-jump State can apply.
-
-Durable continuity is for lasting personal stances, relationship changes, important memories, and major Turning Points. Reviews occur at the configured interval. The generated story must directly support a durable change; player input alone is not evidence. It is normal for a review to finish without storing anything.
-
-The script may briefly ask the model for a final `CC5` record. The Output modifier removes valid or malformed task records before story prose enters history. Creators and players should not type CC5 records themselves.
+There is no Character Continuity output-token recommendation or low-output warning in v5.0.1. Ordinary model output limits still affect how much story the model can write, but inferred reactions and evidence accumulation do not consume output tokens. The rare durable record is short, optional, and never allowed to replace complete prose.
 
 ## Managed cards
 
 The script creates and maintains:
 
-- `CC STATE: Name` — temporary working State.
 - `CC CONTINUITY: Name` — durable personal continuity.
 - `CC RELATIONSHIPS: Name` — durable directional relationships.
-- `CC MEMORY ARCHIVE: Name` — significant memories.
-- `CC TURNING POINTS: Name` — major development.
+- `CC MEMORY ARCHIVE: Name` — significant durable memories.
+- `CC TURNING POINTS: Name` — major durable development.
 - `Character Continuity Status` — compact runtime information.
 - `Character Continuity Debug` — optional diagnostics.
 
-Manual edits to managed cards are supported. Keep field labels and complete relationship or Turning Point blocks intact. Clearing a field intentionally clears the stored value. Avoid renaming managed cards.
+An obsolete `CC STATE: Name` card from an earlier v5 build is removed during cutover.
 
-The first automatic model output is suppressed. The first genuine player action receives a prose-only startup generation before durable reviews begin.
+Manual edits to managed durable cards are supported. Keep field labels and complete relationship or Turning Point blocks intact. Clearing a field intentionally clears its stored value. Avoid renaming managed cards.
+
+The first automatic model output is suppressed. The first genuine player action receives a prose-only startup generation before durable reviews may begin.
+
+## Reading the Status card
+
+The status card reports:
+
+- Registered, scene-active, and focused NPCs, including significance.
+- Focused evidence counts and which owners are ready.
+- The current prose-only review cooldown.
+- The last review owner, candidate result, and applied update.
+- Continuity context use and retained Recent Story size.
+- Whether the generation was a Retry, Continue, or graceful fallback.
+
+It intentionally contains no output allowance or mode recommendation.
 
 ## Troubleshooting
 
-**No configuration, status, or managed cards appear:** Check that the Library is connected to all three modifiers and that at least one card is titled exactly `CC CORE: Name`.
+**No configuration, status, or managed cards appear:** Confirm that the Library is connected to all three modifiers and at least one card is titled exactly `CC CORE: Name`.
 
-**An NPC is not active:** Mention the NPC's name or a listed alias in the current input or recent story. Check `Maximum active NPCs` and the Core card's `Enabled` field.
+**An NPC is not active:** Mention the NPC's name or a listed alias in current input or Recent Story. Check `Maximum active NPCs` and `Enabled`. Significance does not override scene presence.
 
-**Balanced mode does not request State:** The newest generated story may not contain a recognized reaction cue, the focused NPC may not be named, or `protect-story` may be deferring State because the output allowance is low.
+**The same NPC remains focused:** Directly naming that NPC keeps immediate relevance ahead of fairness. In group scenes, avoid unnecessarily repeating only one name if you want the rotation to move naturally.
 
-**State feels stale:** Wait for its configured lifetime, use a clear time jump, or manually clear the relevant field in `CC STATE: Name`.
+**An owner says `ready` but is not reviewed:** The owner must become focused again, the prose-only cooldown must be zero, and the optional review task must fit the context ceiling.
 
-**A CC5 line becomes visible in the story:** Treat that as a beta bug. Save the generated output and the Status card before retrying.
+**A review stores nothing:** This is normal. The evidence may describe only a temporary reaction, repeat existing continuity, or contain no sufficiently supported lasting change.
 
-**A later output is blank:** Check the Status card. The script may have rejected a protocol-only or incomplete response and requested prose recovery.
+**A CC5 line becomes visible:** Treat it as a beta bug. Save the output and Status card before retrying.
+
+**A later output is blank:** Check the Status card. The script suppresses the initial automatic output and rejects a response that contains no complete story prose. After an incomplete response it requests ordinary prose recovery; no evidence or durable update advances.
 
 ## Short open-beta test tracks
 
-You do not need to run every test. Choose one track and play normally for about 10–20 visible generations.
+### Track A: Multi-NPC focus
 
-### Track A: Story-first stability
+Use three to five registered NPCs in one scene for 10–15 successful turns. Mix player actions and Continue. Confirm that all active characters stay distinct while deeper focus rotates according to direct involvement, significance, and fairness.
 
-Use `story-first` with a 100-token or larger output allowance. Watch whether every active NPC remains distinct, story prose survives intact, Retry works normally, and no CC5 line becomes visible.
+### Track B: Durable maturation
 
-### Track B: Temporary reactions
+Create one lasting decision or relationship change. Watch the owner's evidence count mature, then confirm that its later review stores only generated-story-supported continuity. It is valid for a review to store nothing.
 
-Use `balanced` with 130+ output tokens or `full-package` with 150+. Create an emotionally meaningful scene, continue for several generations, and check whether temporary State appears, influences later portrayal, and expires instead of becoming permanent.
+### Track C: Retry and time jump
 
-### Track C: Long-term change
-
-Play through at least one lasting decision, relationship change, or important discovery. Check whether a durable review stores only story-supported changes. If possible, include a clear time jump and confirm that old temporary State is cleared while durable continuity survives.
+Retry a response near a mature review and confirm that the discarded update is rolled back and Retry receives no review task. Then make a clear time jump and confirm that old scene presence falls away while durable continuity survives.
 
 ## Reporting beta issues
 
-Include as much of the following as you are comfortable sharing:
+Useful details include:
 
 - Character Continuity version.
-- Model and output-token setting.
-- Selected mode and low-output behavior.
-- Whether the generation was a normal action, Retry, or Continue.
+- Model and ordinary output setting.
+- Relevant NPC significance values.
+- Scene-active and focused NPCs from the Status card.
+- Evidence counts and review cooldown.
+- Whether the action was normal, Retry, or Continue.
 - Whether a time jump occurred.
-- The unexpected output, with private story details redacted if needed.
-- `Character Continuity Status` and, if enabled, `Character Continuity Debug`.
-- The relevant managed card before and after the problem.
+- The unexpected output and relevant managed card before and after.
+- `Character Continuity Status` and optional `Character Continuity Debug`.
 
-Copyable report template:
+Copyable template:
 
 ```text
 Version:
-Model and output tokens:
-Mode / low-output behavior:
+Model and output setting:
+NPC significance values:
 Normal action, Retry, or Continue:
+Scene-active NPCs / focus:
+Evidence counts / review cooldown:
 What I expected:
 What happened:
 Time jump involved: Yes / No
@@ -221,6 +254,6 @@ Relevant managed card before/after:
 Other notes:
 ```
 
-Private story text is not required. Redacted excerpts plus the Status card are usually more useful than an entire adventure transcript.
+Private story text is not required. Redacted excerpts plus the Status card are usually enough.
 
-The most important beta failures to report are lost story prose, visible CC5 records, an update assigned to the wrong NPC, temporary events becoming durable, State surviving an obvious time jump, or creator card edits being overwritten unexpectedly.
+The most important failures to report are lost prose, visible CC5 records, a review assigned to the wrong NPC, Retry preserving a discarded update, temporary events becoming durable, off-scene NPCs displacing active ones, or creator edits being overwritten.
