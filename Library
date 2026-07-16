@@ -1,6 +1,6 @@
 /*
- * CHARACTER CONTINUITY v5.1.1
- * Protocol Placement Guard
+ * CHARACTER CONTINUITY v5.1.2
+ * Thought Triggers and Reliable Persistence
  *
  * Manually registered NPC:
  *   CC CORE: Full Name
@@ -26,8 +26,10 @@
  * state used by the immediately preceding private build. It contains no
  * v3.x/v4.3 protocol parser, layout migration, or compatibility aliases.
  *
- * v5.1.1 carries compact, expiring Temporary State snapshots for Feeling,
- * first-person in-character Thought, Goal, and Tension. It also supports an
+ * v5.1.2 uses one compact, first-person private Thought plus controlled
+ * trigger codes. The script derives expiring Feeling, Goal, Tension, and
+ * temporary relational pressure deterministically from those triggers. It
+ * also supports an
  * opt-in CC NPC QUEUE: a queued name encountered in Recent Story can produce
  * one editable, review-pending Core profile and become active next generation.
  * Output-replacement detection restores the same pre-generation snapshot when
@@ -67,8 +69,10 @@ globalThis.CHARACTER_CONTINUITY_V5_SETTINGS = {
   MAX_CONTEXT_CEILING: 8000,
   MAX_ACTIVE_NPCS: 5,
   MAX_VALUE_CHARS: 72,
-  MAX_STATE_VALUE_CHARS: 96,
-  MAX_STATE_SNAPSHOT_CHARS: 280,
+  MAX_STATE_VALUE_CHARS: 120,
+  MAX_STATE_SNAPSHOT_CHARS: 260,
+  MAX_STATE_TRIGGERS: 3,
+  MAX_RELATIONAL_PRESSURE: 5,
   MAX_REGISTRATION_FIELD_CHARS: 96,
   MAX_REGISTRATION_SNAPSHOT_CHARS: 360,
   MAX_OWNER_EVIDENCE_OUTPUTS: 4,
@@ -327,7 +331,7 @@ function CharacterContinuity(hook, incomingText) {
         maxActive: Math.min(5, numberValue(extractLine(source, "Maximum active NPCs"), settings.DEFAULT_MAX_ACTIVE_NPCS || 5, 1, 5)),
         debug: boolValue(extractLine(source, "Debug"), settings.DEFAULT_DEBUG === true)
       });
-      saveCard(card, source, "Player-editable v5.1.1 settings. Converted to State, staggered focus, and durable persistence.");
+      saveCard(card, source, "Player-editable v5.1.2 settings. Converted to Thought triggers, staggered focus, and durable persistence.");
     }
 
     if (!extractLine(source, "Temporary State lifetime")) {
@@ -341,7 +345,7 @@ function CharacterContinuity(hook, incomingText) {
         maxActive: extractLine(source, "Maximum active NPCs") || settings.DEFAULT_MAX_ACTIVE_NPCS || 5,
         debug: boolValue(extractLine(source, "Debug"), settings.DEFAULT_DEBUG === true)
       });
-      saveCard(card, source, "Player-editable v5.1.1 settings.");
+      saveCard(card, source, "Player-editable v5.1.2 settings.");
     }
 
     const turning = enumValue(extractLine(source, "Turning Points"), ["growth-only", "all-directions", "disabled"], "growth-only");
@@ -517,12 +521,54 @@ function CharacterContinuity(hook, incomingText) {
 
   const characters = discoverCharacters();
 
+  const TRIGGER_RULES = {
+    affection: { feeling: "affectionate", goal: "show care", closeness: 1 },
+    anger: { feeling: "angry", goal: "confront the cause", tension: "anger strains restraint", conflict: 1 },
+    anxiety: { feeling: "anxious", goal: "seek reassurance or control", tension: "fear complicates action" },
+    curiosity: { feeling: "curious", goal: "learn more" },
+    grief: { feeling: "grieving", goal: "process the loss", tension: "grief pulls against moving forward" },
+    hope: { feeling: "hopeful", goal: "pursue the possibility" },
+    hurt: { feeling: "hurt", goal: "protect themself", tension: "hurt complicates connection" },
+    relief: { feeling: "relieved", goal: "preserve the new stability" },
+    resolve: { feeling: "determined", goal: "follow through" },
+    uncertainty: { feeling: "uncertain", goal: "seek clarity", tension: "wants certainty but does not yet have it" },
+    nostalgia: { feeling: "nostalgic", goal: "revisit shared history" },
+    protect: { feeling: "protective", goal: "keep the target safe" },
+    reconnect: { feeling: "cautiously warm", goal: "rebuild connection", closeness: 1 },
+    withdraw: { feeling: "guarded", goal: "create distance", tension: "self-protection competes with connection", closeness: -1 },
+    responsibility: { feeling: "focused", goal: "carry out the responsibility" },
+    conflict: { feeling: "tense", goal: "resolve or withstand the conflict", tension: "active conflict remains unresolved", conflict: 1 },
+    trust_gain: { feeling: "encouraged", goal: "risk greater reliance", trust: 1 },
+    trust_loss: { feeling: "wary", goal: "reduce reliance", tension: "trust has been shaken", trust: -1 },
+    closeness_gain: { feeling: "connected", goal: "deepen the connection", closeness: 1 },
+    closeness_loss: { feeling: "distant", goal: "reassess the connection", tension: "distance strains the relationship", closeness: -1 },
+    boundary_respected: { feeling: "safer", goal: "maintain clear boundaries", trust: 1 },
+    boundary_crossed: { feeling: "unsafe and angry", goal: "reassert the boundary", tension: "a crossed boundary remains unresolved", trust: -2, conflict: 1 },
+    repair: { feeling: "cautiously relieved", goal: "continue repairing the relationship", trust: 1, conflict: -1 },
+    betrayal: { feeling: "betrayed", goal: "protect themself from further harm", tension: "betrayal ruptures trust", trust: -3, closeness: -2, conflict: 2 }
+  };
+
+  const TRIGGER_CODES = Object.keys(TRIGGER_RULES);
+
+  function normalizeTriggerCode(value) {
+    const code = keyOf(value).replace(/\s+/g, "_");
+    return Object.prototype.hasOwnProperty.call(TRIGGER_RULES, code) ? code : "";
+  }
+
+  function triggerList(value) {
+    const raw = Array.isArray(value) ? value : textOf(value).split(/[,;\s]+/);
+    return unique(raw.map(normalizeTriggerCode).filter(Boolean), 40)
+      .slice(0, Math.max(1, Number(settings.MAX_STATE_TRIGGERS) || 3));
+  }
+
   function blankState() {
     return {
       feeling: { value: "", updatedClock: 0 },
       thought: { value: "", updatedClock: 0 },
       goal: { value: "", updatedClock: 0 },
-      tension: { value: "", updatedClock: 0 }
+      tension: { value: "", updatedClock: 0 },
+      triggers: { value: [], updatedClock: 0 },
+      target: { key: "", name: "", updatedClock: 0 }
     };
   }
 
@@ -530,7 +576,7 @@ function CharacterContinuity(hook, incomingText) {
     return {
       state: blankState(),
       durable: { feeling: "", thought: "", goal: "", tension: "" },
-      relationships: {}, memories: [], turningPoints: []
+      relationships: {}, pressures: {}, memories: [], turningPoints: []
     };
   }
 
@@ -545,7 +591,40 @@ function CharacterContinuity(hook, incomingText) {
         updatedClock: Math.max(0, Number(object ? (object.updatedClock ?? object.generation ?? object.turn) : fallbackClock) || 0)
       };
     });
+    const rawTriggers = source.triggers && typeof source.triggers === "object" && !Array.isArray(source.triggers)
+      ? source.triggers
+      : { value: source.triggers, updatedClock: fallbackClock };
+    result.triggers = {
+      value: triggerList(rawTriggers.value ?? rawTriggers.text),
+      updatedClock: Math.max(0, Number(rawTriggers.updatedClock ?? rawTriggers.generation ?? fallbackClock) || 0)
+    };
+    const rawTarget = source.target && typeof source.target === "object" && !Array.isArray(source.target)
+      ? source.target
+      : { name: source.target, key: source.targetKey, updatedClock: fallbackClock };
+    result.target = {
+      key: keyOf(rawTarget.key || rawTarget.targetKey || rawTarget.name),
+      name: line(rawTarget.name || rawTarget.target, 120),
+      updatedClock: Math.max(0, Number(rawTarget.updatedClock ?? rawTarget.generation ?? fallbackClock) || 0)
+    };
     return result;
+  }
+
+  function normalizePressure(raw, targetKey = "") {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const key = keyOf(raw.targetKey || targetKey || raw.target);
+    if (!key || key === "self") return null;
+    const limit = Math.max(1, Number(settings.MAX_RELATIONAL_PRESSURE) || 5);
+    const clamp = value => Math.max(-limit, Math.min(limit, Number(value) || 0));
+    return {
+      targetKey: key,
+      target: line(raw.target || targetKey, 120),
+      trust: clamp(raw.trust),
+      closeness: clamp(raw.closeness),
+      conflict: clamp(raw.conflict),
+      cues: triggerList(raw.cues || raw.triggers || []),
+      lastEventHash: line(raw.lastEventHash, 40),
+      updatedClock: Math.max(0, Number(raw.updatedClock ?? raw.generation ?? raw.turn) || 0)
+    };
   }
 
   function normalizeRelationship(raw, targetKey = "") {
@@ -586,6 +665,10 @@ function CharacterContinuity(hook, incomingText) {
       const relationship = normalizeRelationship(value, targetKey);
       if (relationship) result.relationships[relationship.targetKey] = relationship;
     });
+    Object.entries(raw.pressures || raw.relationalPressure || {}).forEach(([targetKey, value]) => {
+      const pressure = normalizePressure(value, targetKey);
+      if (pressure) result.pressures[pressure.targetKey] = pressure;
+    });
     result.memories = (Array.isArray(raw.memories) ? raw.memories : []).map(item => normalizeMemory(item)).filter(Boolean);
     result.turningPoints = (Array.isArray(raw.turningPoints) ? raw.turningPoints : []).map(item => clone(item)).filter(Boolean);
     return result;
@@ -610,6 +693,7 @@ function CharacterContinuity(hook, incomingText) {
         memoryTokens: 0, taskTokens: 0, reserveTokens: 0, injectedTokens: 0,
         headroomTokens: 0, recentStoryChars: 0, task: "none", owner: "",
         candidate: "not requested", update: "None", evidence: "None",
+        protocol: "None", evidenceAdmission: "None",
         retry: false, continue: false, gracefulFallback: false
       }
     };
@@ -690,12 +774,22 @@ function CharacterContinuity(hook, incomingText) {
 
   function stateEntry(npc) {
     const state = normalizeState(npc && npc.state, CC.stateClock);
+    const pressureLines = Object.values((npc && npc.pressures) || {}).map(item => normalizePressure(item, item && item.targetKey)).filter(Boolean).map(item => (
+      "- " + (item.target || item.targetKey) + " | trust " + (item.trust >= 0 ? "+" : "") + item.trust
+      + " | closeness " + (item.closeness >= 0 ? "+" : "") + item.closeness
+      + " | conflict " + (item.conflict >= 0 ? "+" : "") + item.conflict
+      + (item.cues.length ? " | cues " + item.cues.join(", ") : "")
+    ));
     return [
-      "Temporary working continuity; fields expire independently after " + runtime.stateLifetime + " successful non-Retry generations.",
+      "Temporary working continuity; Thought and trigger-derived fields expire after " + runtime.stateLifetime + " successful non-Retry generations.",
       "Feeling: " + state.feeling.value,
       "Thought: " + state.thought.value,
       "Goal: " + state.goal.value,
-      "Tension: " + state.tension.value
+      "Tension: " + state.tension.value,
+      "Triggers: " + state.triggers.value.join(", "),
+      "Target: " + state.target.name,
+      "Relational pressure:",
+      pressureLines.length ? pressureLines.join("\n") : "None."
     ].join("\n");
   }
 
@@ -773,7 +867,7 @@ function CharacterContinuity(hook, incomingText) {
     if (!npc) return;
     const stateTitle = (settings.STATE_PREFIX || "CC STATE: ") + character.name;
     const stateText = stateEntry(npc);
-    upsertCard(stateTitle, stateText, "Expiring v5.1.1 temporary State. Thought is first person in the NPC's voice.", "state", character.key);
+    upsertCard(stateTitle, stateText, "Expiring v5.1.2 Thought and trigger-derived State. Thought remains first person in the NPC's voice.", "state", character.key);
     CC.cardHashes[stateTitle] = hashString(stateText);
 
     const durableTitle = (settings.CONTINUITY_PREFIX || "CC CONTINUITY: ") + character.name;
@@ -826,6 +920,16 @@ function CharacterContinuity(hook, incomingText) {
       const value = line(match[1], settings.MAX_STATE_VALUE_CHARS || 96);
       if (value !== prior[field].value) result[field] = { value, updatedClock: CC.stateClock };
     });
+    const triggerMatch = textOf(source).match(/^[ \t]*Triggers[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/im);
+    if (triggerMatch) {
+      const value = triggerList(triggerMatch[1]);
+      if (value.join("|") !== prior.triggers.value.join("|")) result.triggers = { value, updatedClock: CC.stateClock };
+    }
+    const targetMatch = textOf(source).match(/^[ \t]*Target[ \t]*:[ \t]*([^\r\n]*)[ \t]*$/im);
+    if (targetMatch) {
+      const name = line(targetMatch[1], 120);
+      if (keyOf(name) !== prior.target.key) result.target = { key: keyOf(name), name, updatedClock: CC.stateClock };
+    }
     return result;
   }
 
@@ -919,7 +1023,13 @@ function CharacterContinuity(hook, incomingText) {
     CC.cardsInitialized = true;
   }
 
-  if (!CC.cardsInitialized) writeAllCharacterCards();
+  if (!CC.cardsInitialized) {
+    characters.forEach(character => {
+      const existing = findCard((settings.STATE_PREFIX || "CC STATE: ") + character.name);
+      if (existing) CC.npcs[character.key].state = parseStateFields(entryOf(existing), CC.npcs[character.key].state);
+    });
+    writeAllCharacterCards();
+  }
 
   function historyType(item) {
     return keyOf(item && (item.type ?? item.actionType ?? item.kind));
@@ -1037,17 +1147,53 @@ function CharacterContinuity(hook, incomingText) {
     return uncheckedQueueEntries().find(entry => aliasMentioned(storySource, entry.name)) || null;
   }
 
+  function interactionScore(character, currentInput = "") {
+    const source = textOf(currentInput);
+    let score = 0;
+    character.aliases.forEach(alias => {
+      if (!aliasMentioned(source, alias)) return;
+      score = Math.max(score, 100);
+      const wanted = escapeRegExp(line(alias, 120));
+      const patterns = [
+        new RegExp("\\b(?:to|toward|towards|at|beside|with|near)\\s+(?:the\\s+)?" + wanted + "(?=$|[^A-Za-z0-9])", "i"),
+        new RegExp("\\b(?:ask|tell|thank|address|greet|approach|face|answer|help|comfort|confront|warn|invite|hug|kiss|touch)\\w*\\s+(?:to\\s+)?" + wanted + "(?=$|[^A-Za-z0-9])", "i"),
+        new RegExp("(^|[\\s\\\"'“‘])" + wanted + "\\s*[,!:—-]", "i")
+      ];
+      if (patterns.some(pattern => pattern.test(source))) score = Math.max(score, 650);
+    });
+    return score;
+  }
+
   function selectFocus(active, currentInput = "") {
     if (!active.length) return null;
-    const named = active.filter(character => character.aliases.some(alias => aliasMentioned(currentInput, alias)));
-    const pool = named.length ? named : active;
+    const scored = active.map(character => ({ character, score: interactionScore(character, currentInput) }));
+    const named = scored.filter(item => item.score > 0);
+    const pool = named.length ? named : scored;
     return pool.slice().sort((left, right) => {
-      const leftServed = Number(CC.focusLastServed[left.key]);
-      const rightServed = Number(CC.focusLastServed[right.key]);
+      if (right.score !== left.score) return right.score - left.score;
+      const leftServed = Number(CC.focusLastServed[left.character.key]);
+      const rightServed = Number(CC.focusLastServed[right.character.key]);
       const leftAge = Number.isFinite(leftServed) ? leftServed : -1;
       const rightAge = Number.isFinite(rightServed) ? rightServed : -1;
-      return leftAge - rightAge || right.significance - left.significance || active.indexOf(left) - active.indexOf(right);
-    })[0];
+      return leftAge - rightAge
+        || right.character.significance - left.character.significance
+        || active.indexOf(left.character) - active.indexOf(right.character);
+    })[0].character;
+  }
+
+  function characterPronouns(character) {
+    return unique((character.pronouns || []).flatMap(value => textOf(value).split(/[\/,;|\s]+/)), 30).map(keyOf).filter(Boolean);
+  }
+
+  function ownerPortrayed(owner, story, active = []) {
+    if (!owner) return false;
+    if (owner.aliases.some(alias => aliasMentioned(story, alias))) return true;
+    const others = active.filter(character => character.key !== owner.key);
+    if (others.some(character => character.aliases.some(alias => aliasMentioned(story, alias)))) return false;
+    if (active.length === 1) return true;
+    const ownerForms = characterPronouns(owner);
+    const uniqueForms = ownerForms.filter(form => !others.some(character => characterPronouns(character).includes(form)));
+    return uniqueForms.some(form => form.length > 1 && aliasMentioned(story, form));
   }
 
   function captureSnapshot() {
@@ -1125,7 +1271,21 @@ function CharacterContinuity(hook, incomingText) {
     if (state.thought.value) parts.push("Private Thought — first person, owner's voice: " + state.thought.value);
     if (state.goal.value) parts.push("Goal " + state.goal.value);
     if (state.tension.value) parts.push("Tension " + state.tension.value);
+    if (state.triggers.value.length) parts.push("Cues " + state.triggers.value.join(", "));
     return parts.length ? "State(" + character.name + "): " + parts.join("; ") : "";
+  }
+
+  function strongestPressureLine(character, npc) {
+    const pressures = Object.values((npc && npc.pressures) || {}).map(item => normalizePressure(item, item && item.targetKey)).filter(Boolean);
+    const pressure = pressures.sort((left, right) => (
+      Math.abs(right.trust) + Math.abs(right.closeness) + Math.abs(right.conflict)
+      - Math.abs(left.trust) - Math.abs(left.closeness) - Math.abs(left.conflict)
+    ))[0];
+    if (!pressure) return "";
+    return "Pressure(" + character.name + "→" + (pressure.target || pressure.targetKey) + "): trust "
+      + (pressure.trust >= 0 ? "+" : "") + pressure.trust + ", closeness "
+      + (pressure.closeness >= 0 ? "+" : "") + pressure.closeness + ", conflict "
+      + (pressure.conflict >= 0 ? "+" : "") + pressure.conflict + ". Temporary signals only; durable change still requires generated-story evidence.";
   }
 
   function relationshipTargetName(relationship) {
@@ -1222,6 +1382,7 @@ function CharacterContinuity(hook, incomingText) {
       const core = firstPhrase(character.personality || character.protectedTraits || character.core, 150);
       add(core ? "Core: " + core : "", "npc", 940, true);
       add(temporaryStateLine(character, npc), "state", 930);
+      add(strongestPressureLine(character, npc), "state", 920);
       if (focus && character.key === focus.key) {
         add(character.disposition ? "Style: " + firstPhrase(character.disposition, 160) : "", "npc", 850);
         add(durableLine(npc), "npc", 820);
@@ -1282,8 +1443,27 @@ function CharacterContinuity(hook, incomingText) {
     return ownerEvidence(ownerKey).length;
   }
 
+  function ownerPressures(ownerKey) {
+    const npc = CC.npcs[ownerKey];
+    return Object.values((npc && npc.pressures) || {}).map(item => normalizePressure(item, item && item.targetKey)).filter(Boolean);
+  }
+
+  function pressureReviewReady(ownerKey) {
+    if (ownerObservationCount(ownerKey) < 1) return false;
+    return ownerPressures(ownerKey).some(item => (
+      Math.abs(item.trust) >= 2 || Math.abs(item.closeness) >= 2 || Math.abs(item.conflict) >= 2
+    ));
+  }
+
+  function hasEvidenceAfterLastReview(ownerKey) {
+    const lastAttempt = Number(CC.ownerLastDurableAttempt[ownerKey]);
+    if (!Number.isFinite(lastAttempt)) return ownerObservationCount(ownerKey) > 0;
+    return ownerEvidence(ownerKey).some(item => Number(item && item.generation) > lastAttempt);
+  }
+
   function ownerReadyForReview(ownerKey) {
-    return ownerObservationCount(ownerKey) >= runtime.durableObservations;
+    return hasEvidenceAfterLastReview(ownerKey)
+      && (ownerObservationCount(ownerKey) >= runtime.durableObservations || pressureReviewReady(ownerKey));
   }
 
   function appendOwnerEvidence(ownerKey, story, generation) {
@@ -1308,6 +1488,18 @@ function CharacterContinuity(hook, incomingText) {
     ].join("\n");
   }
 
+  function pressureSupplement(owner) {
+    const rows = ownerPressures(owner.key).filter(item => item.trust || item.closeness || item.conflict).map(item => (
+      (item.target || item.targetKey) + ": trust " + (item.trust >= 0 ? "+" : "") + item.trust
+      + ", closeness " + (item.closeness >= 0 ? "+" : "") + item.closeness
+      + ", conflict " + (item.conflict >= 0 ? "+" : "") + item.conflict
+      + (item.cues.length ? "; cues " + item.cues.join(", ") : "")
+    ));
+    return rows.length
+      ? "Temporary trigger pressure for " + owner.name + " (scheduling context only, never durable Evidence):\n" + rows.join("\n")
+      : "";
+  }
+
   function durableTask(owner, active, supplement = "") {
     const targets = targetMap(owner, active);
     const targetText = targets.map(item => item.code + "=" + item.name).join(", ");
@@ -1316,7 +1508,7 @@ function CharacterContinuity(hook, incomingText) {
       : (runtime.turningPoints === "all-directions" ? ", yg/yd/ym/yn=Turning Point direction" : "");
     return [
       "<SYSTEM>",
-      "Complete normal story first. Review fixed Owner " + owner.name + ". If completed generated prose, Recent Story, or the evidence below directly establishes one new lasting change, append one final (CC5|D|Target|Key|Value). Otherwise append nothing; never write NONE.",
+      "Complete normal story first. Review fixed Owner " + owner.name + ". If completed generated prose, Recent Story, or the evidence below directly establishes one newly revealed lasting fact, memory, decision, responsibility, boundary, or relationship change, append one final (CC5|D|Target|Key|Value). Otherwise append nothing; never write NONE.",
       "Targets: " + targetText + ". Keys: f/t/g/x=durable personal or directional stance, m=memory, r=relationship, l=role, b=boundary, u=trust, c=closeness" + turningKeys + ".",
       "Value must be " + owner.name + "'s near-extractive continuity, at most " + settings.MAX_VALUE_CHARS + " characters. Player input alone is not Evidence. Do not store a momentary reaction as durable continuity.",
       "An explicit acceptance, refusal, or reassignment of ongoing responsibility is eligible Role evidence even when stated briefly; it does not require an emotional explanation.",
@@ -1326,12 +1518,14 @@ function CharacterContinuity(hook, incomingText) {
     ].filter(Boolean).join("\n");
   }
 
-  function stateTask(owner) {
+  function stateTask(owner, active) {
+    const targets = targetMap(owner, active);
+    const targetText = targets.map(item => item.code + "=" + item.name).join(", ");
     return [
       "<SYSTEM>",
-      "Before story, reassess fixed Owner " + owner.name + "'s immediate inner state from Core, existing State, relationships, current input, and Recent Story. If one or more State fields meaningfully changed or are missing but now supported, write exactly one compact record as the first nonblank output line. It must begin exactly (CC5|S|, end with ), and contain only changed code=value pairs separated by |. Codes: f=Feeling, t=private Thought, g=current Goal, x=Tension. Use ~ only to clear a field that no longer applies. Never place this record after or inside story.",
-      "Thought must be a short first-person private thought in " + owner.name + "'s own voice. Feeling, Goal, and Tension are compact summaries. Ground subtext without inventing facts, contradicting story, or deciding the player's feelings, consent, commitments, or response.",
-      "Then write complete normal story consistent with the snapshot. If State remains accurate, output story only and omit every CC5 record. The story is mandatory and must survive even when space is tight.",
+      "Before story, infer fixed Owner " + owner.name + "'s immediate subtext from Core, existing State, relationships, current input, and Recent Story. If it meaningfully changed, write one compact leading record: (CC5|I|Target|trigger,trigger|first-person Thought). Targets: " + targetText + ". Choose 1-3 exact triggers, strongest first: " + TRIGGER_CODES.join(", ") + ".",
+      "Thought must be short, private, first person, and in " + owner.name + "'s own voice. The script derives Feeling, Goal, Tension, and temporary relational pressure from the triggers. Relationship triggers require completed generated-story support; player input alone cannot earn trust or closeness. Do not use | or ) inside Thought.",
+      "Put the record before story, then write complete normal story consistent with it. If subtext remains accurate, output story only. Never invent facts or decide the player's feelings, consent, commitments, or response. Complete story is mandatory.",
       "</SYSTEM>"
     ].join("\n");
   }
@@ -1480,16 +1674,19 @@ function CharacterContinuity(hook, incomingText) {
   const TRUST_SHIFT = /\b(?:betray|breach|distrust|entrust|earned|relies?|rely|restor|trust|weakens?|strengthens?)\w*\b/i;
   const RELATIONSHIP_SHIFT = /\b(?:becomes?|breaks? up|enemy|estranged|family|friend|lover|married|mentor|no longer|partner|reconcil|relationship|rival|spouse)\w*\b/i;
   const CLOSENESS_SHIFT = /\b(?:affection|apart|closeness|closer|embrace|hug|intimacy|reconnect|reconcil|renewed|restored|touch)\w*\b/i;
-  const BOUNDARY_SHIFT = /\b(?:allow|boundary|consent|enforce|forbid|limit|must not|refuse|respect|stop|will not|won't)\w*\b/i;
+  const BOUNDARY_SHIFT = /\b(?:allow|boundary|consent|enforce|forbid|limit|must ask|must not|need permission|only if|refuse|require|respect|stop|without asking|will not|won't)\w*\b/i;
   const ROLE_SHIFT = /\b(?:accept|assign|commit|duty|entrust|handle|manage|obligation|refuse|responsib|role|take on|will manage|will protect)\w*\b/i;
-  const MEMORY_EVENT = /\b(?:attack|betray|breakthrough|confess|death|decide|discover|first|forgive|injur|leave|left|married|milestone|promise|realize|remember|return|save|trust)\w*\b/i;
+  const MEMORY_EVENT = /\b(?:attack|betray|breakthrough|childhood|confess|death|decide|discover|first|forgive|injur|leave|left|married|milestone|promise|realize|recall|remember|return|save|trust|used to|years ago)\w*\b/i;
   const TURNING_SHIFT = /\b(?:accept|abandon|betray|breakthrough|change|commit|decide|discover|from now on|identity|lasting|no longer|principle|purpose|realize|reveal|transform)\w*\b/i;
   const GROWTH_SHIFT = /\b(?:accept|breakthrough|courage|forgive|heal|improve|overcome|recover|repair|restore|strengthen)\w*\b/i;
   const DECLINE_SHIFT = /\b(?:abandon|betray|corrupt|decline|give up|harden|relapse|rupture|setback|violate|weaken|withdraw)\w*\b/i;
   const TIME_JUMP = /\b(?:(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|several|many|\d+)\s+(?:days?|weeks?|months?|years?|decades?)\s+later|(?:days?|weeks?|months?|years?|decades?)\s+(?:passed|went by)|after\s+(?:a|an|one|two|three|four|five|six|seven|eight|nine|ten|several|many|\d+)\s+(?:days?|weeks?|months?|years?|decades?)|the next (?:morning|day|week|month|year)|by the following (?:week|month|year))\b/i;
 
   function clearTemporaryState() {
-    Object.values(CC.npcs || {}).forEach(npc => { npc.state = blankState(); });
+    Object.values(CC.npcs || {}).forEach(npc => {
+      npc.state = blankState();
+      npc.pressures = {};
+    });
   }
 
   function expireTemporaryState(clock) {
@@ -1502,6 +1699,14 @@ function CharacterContinuity(hook, incomingText) {
           npc.state[field] = { value: "", updatedClock: clock };
           expired += 1;
         }
+      });
+      if (npc.state.triggers.value.length && clock - npc.state.triggers.updatedClock >= runtime.stateLifetime) {
+        npc.state.triggers = { value: [], updatedClock: clock };
+        npc.state.target = { key: "", name: "", updatedClock: clock };
+      }
+      Object.entries(npc.pressures || {}).forEach(([targetKey, raw]) => {
+        const pressure = normalizePressure(raw, targetKey);
+        if (!pressure || clock - pressure.updatedClock >= runtime.stateLifetime) delete npc.pressures[targetKey];
       });
     });
     return expired;
@@ -1531,73 +1736,117 @@ function CharacterContinuity(hook, incomingText) {
   }
 
   function parseTerminalCandidate(output, plan) {
-    const lines = textOf(output).replace(/\r/g, "").split("\n");
-    const nonblank = lines.map((value, index) => value.trim() ? index : -1).filter(index => index >= 0);
-    const protocolIndices = [];
-    const recognized = [];
-    let suspicious = false;
-
-    lines.forEach((value, index) => {
-      if (!/\(CC5\|/i.test(value)) return;
-      protocolIndices.push(index);
-      const match = value.trim().match(/^\(CC5\|([SDN])\|([^\r\n]*)\)$/i);
-      if (match) recognized.push({ index, scope: match[1].toUpperCase(), body: match[2] });
-      else suspicious = true;
-    });
-
-    const story = lines.map((value, index) => {
-      if (protocolIndices.includes(index)) return value.replace(/\s*\(CC5\|.*$/i, "");
-      return value;
-    }).join("\n").trim();
-
-    if (!protocolIndices.length) return { story, candidate: null, malformed: false };
-    if (suspicious || protocolIndices.length !== 1 || recognized.length !== 1) {
-      return { story, candidate: null, malformed: true };
+    const source = textOf(output).replace(/\r/g, "");
+    const markers = [...source.matchAll(/\(CC5\|/ig)].map(match => match.index);
+    if (!markers.length) {
+      return { story: source.trim(), candidate: null, malformed: false, hadProtocol: false, reason: "No CC5 record", raw: "", normalized: false };
     }
 
-    const record = recognized[0];
-    const first = nonblank[0];
-    const last = nonblank[nonblank.length - 1];
-    if ((record.scope === "D" && record.index !== last) || (["S", "N"].includes(record.scope) && record.index !== first)) {
-      return { story, candidate: null, malformed: true };
+    const stripLine = value => {
+      let result = value;
+      let start = result.search(/\(CC5\|/i);
+      while (start >= 0) {
+        const close = result.indexOf(")", start);
+        result = result.slice(0, start) + (close >= 0 ? result.slice(close + 1) : "");
+        start = result.search(/\(CC5\|/i);
+      }
+      return result.replace(/[ \t]{2,}/g, " ").trimEnd();
+    };
+    const strippedStory = source.split("\n").map(stripLine).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (markers.length !== 1) {
+      return {
+        story: strippedStory, candidate: null, malformed: true, hadProtocol: true,
+        reason: "Expected at most one CC5 record but found " + markers.length + ".", raw: "multiple records", normalized: false
+      };
     }
 
-    if (record.scope === "S") {
+    const start = markers[0];
+    const lineStart = source.lastIndexOf("\n", start) + 1;
+    const lineEndFound = source.indexOf("\n", start);
+    const lineEnd = lineEndFound >= 0 ? lineEndFound : source.length;
+    const recordLine = source.slice(lineStart, lineEnd);
+    const relativeStart = start - lineStart;
+    const close = recordLine.indexOf(")", relativeStart);
+    if (close < 0) {
+      return {
+        story: strippedStory, candidate: null, malformed: true, hadProtocol: true,
+        reason: "CC5 record was missing its closing parenthesis.", raw: line(recordLine.slice(relativeStart), 260), normalized: false
+      };
+    }
+
+    const rawRecord = recordLine.slice(relativeStart, close + 1).trim();
+    const match = rawRecord.match(/^\(CC5\|([IDNS])\|([\s\S]*)\)$/i);
+    if (!match) {
+      return {
+        story: strippedStory, candidate: null, malformed: true, hadProtocol: true,
+        reason: "CC5 record used an unknown scope or invalid envelope.", raw: line(rawRecord, 260), normalized: false
+      };
+    }
+
+    const scope = match[1].toUpperCase();
+    const body = match[2];
+    const beforeRecord = source.slice(0, start).trim();
+    const afterRecord = source.slice(lineStart + close + 1).trim();
+    let normalized = (scope === "D" ? !!afterRecord : !!beforeRecord) || !!recordLine.slice(0, relativeStart).trim() || !!recordLine.slice(close + 1).trim();
+    const base = {
+      story: strippedStory, malformed: false, hadProtocol: true,
+      raw: line(rawRecord, 260), normalized, reason: normalized ? "CC5 placement was normalized safely." : "CC5 record parsed."
+    };
+
+    if (scope === "I") {
+      const parts = body.split("|");
+      const targetCode = line(parts.shift(), 8).toUpperCase();
+      const suppliedTriggers = textOf(parts.shift()).split(/[,;\s]+/).filter(Boolean);
+      const triggers = triggerList(suppliedTriggers);
+      const ignored = suppliedTriggers.map(value => keyOf(value).replace(/\s+/g, "_")).filter(value => value && !TRIGGER_CODES.includes(value));
+      const thoughtSource = parts.join(" | ").trim();
+      const thought = line(thoughtSource, settings.MAX_STATE_VALUE_CHARS || 120);
+      if (!/^[SPN]\d*$/.test(targetCode)) {
+        return { ...base, candidate: null, malformed: true, reason: "Thought record used an invalid target code." };
+      }
+      if (!triggers.length) {
+        return { ...base, candidate: null, malformed: true, reason: "Thought record contained no recognized trigger code." };
+      }
+      if (ignored.length || triggers.length < suppliedTriggers.length || thought.length < thoughtSource.length) {
+        normalized = true;
+        base.normalized = true;
+        base.reason = "Thought record was normalized; unsupported or excess content was ignored.";
+      }
+      return { ...base, candidate: { scope: "state", targetCode, triggers, thought } };
+    }
+
+    if (scope === "S") {
       const fields = parsePairs(
-        record.body,
+        body,
         ["f", "t", "g", "x"],
-        settings.MAX_STATE_VALUE_CHARS || 96,
-        settings.MAX_STATE_SNAPSHOT_CHARS || 280
+        settings.MAX_STATE_VALUE_CHARS || 120,
+        settings.MAX_STATE_SNAPSHOT_CHARS || 260
       );
       return fields
-        ? { story, candidate: { scope: "state", fields }, malformed: false }
-        : { story, candidate: null, malformed: true };
+        ? { ...base, candidate: { scope: "state", fields, legacy: true } }
+        : { ...base, candidate: null, malformed: true, reason: "Legacy State record contained invalid fields." };
     }
 
-    if (record.scope === "N") {
+    if (scope === "N") {
       const fields = parsePairs(
-        record.body,
+        body,
         ["p", "i", "k", "d", "a", "v"],
         settings.MAX_REGISTRATION_FIELD_CHARS || 96,
         settings.MAX_REGISTRATION_SNAPSHOT_CHARS || 360
       );
       return fields
-        ? { story, candidate: { scope: "registration", fields }, malformed: false }
-        : { story, candidate: null, malformed: true };
+        ? { ...base, candidate: { scope: "registration", fields } }
+        : { ...base, candidate: null, malformed: true, reason: "Registration record contained invalid or unsupported fields." };
     }
 
-    const parts = record.body.split("|");
-    const targetCode = line(parts[0], 8).toUpperCase();
-    const durableKey = keyOf(parts[1]).replace(/\s+/g, "");
-    const durableValue = parts.length === 3 ? wholeLine(parts[2], settings.MAX_VALUE_CHARS || 72) : "";
+    const parts = body.split("|");
+    const targetCode = line(parts.shift(), 8).toUpperCase();
+    const durableKey = keyOf(parts.shift()).replace(/\s+/g, "");
+    const durableValue = line(parts.join(" | "), settings.MAX_VALUE_CHARS || 72);
     if (!/^[SPN]\d*$/.test(targetCode) || !/^(?:[ftgxmrlbuc]|yg|yd|ym|yn)$/.test(durableKey) || !durableValue) {
-      return { story, candidate: null, malformed: true };
+      return { ...base, candidate: null, malformed: true, reason: "Durable record contained an invalid target, key, or value." };
     }
-    return {
-      story,
-      candidate: { scope: "durable", targetCode, key: durableKey, value: durableValue },
-      malformed: false
-    };
+    return { ...base, candidate: { scope: "durable", targetCode, key: durableKey, value: durableValue } };
   }
 
   function targetForCode(plan, code) {
@@ -1661,26 +1910,116 @@ function CharacterContinuity(hook, incomingText) {
     return /\b(?:i|i'm|i’m|i've|i’ve|i'll|i’ll|i'd|i’d|me|my|mine|myself)\b/i.test(textOf(value));
   }
 
-  function applyStateCandidate(owner, candidate, nextClock) {
-    if (!owner || !candidate || !candidate.fields) return { ok: false, error: "State snapshot lacked its fixed owner or fields." };
-    if (candidate.fields.t && candidate.fields.t !== "~" && !firstPersonThought(candidate.fields.t)) {
-      return { ok: false, error: "Temporary Thought must be first person in the NPC's own voice." };
-    }
+  function derivedStateFromTriggers(triggers) {
+    const rules = triggers.map(code => TRIGGER_RULES[code]).filter(Boolean);
+    const feelings = unique(rules.map(rule => rule.feeling).filter(Boolean), 60).slice(0, 2);
+    const goals = unique(rules.map(rule => rule.goal).filter(Boolean), 96);
+    const tensions = unique(rules.map(rule => rule.tension).filter(Boolean), 120);
+    const positive = triggers.some(code => ["affection", "hope", "relief", "reconnect", "trust_gain", "closeness_gain", "boundary_respected", "repair"].includes(code));
+    const negative = triggers.some(code => ["anger", "anxiety", "grief", "hurt", "uncertainty", "withdraw", "conflict", "trust_loss", "closeness_loss", "boundary_crossed", "betrayal"].includes(code));
+    return {
+      feeling: feelings.join(" and "),
+      goal: goals[0] || "",
+      tension: tensions[0] || (positive && negative ? "competing impulses remain unresolved" : "")
+    };
+  }
+
+  function applyTriggerPressure(npc, target, triggers, nextClock, story) {
+    if (!npc || !target || target.key === "self") return [];
+    const deltas = triggers.reduce((result, code) => {
+      const rule = TRIGGER_RULES[code] || {};
+      result.trust += Number(rule.trust) || 0;
+      result.closeness += Number(rule.closeness) || 0;
+      result.conflict += Number(rule.conflict) || 0;
+      return result;
+    }, { trust: 0, closeness: 0, conflict: 0 });
+    if (!deltas.trust && !deltas.closeness && !deltas.conflict) return [];
+    const eventHash = hashString(canonicalOutput(story));
+    const prior = normalizePressure(npc.pressures[target.key], target.key) || {
+      targetKey: target.key, target: target.name, trust: 0, closeness: 0, conflict: 0,
+      cues: [], lastEventHash: "", updatedClock: nextClock
+    };
+    if (prior.lastEventHash && prior.lastEventHash === eventHash) return [];
+    const limit = Math.max(1, Number(settings.MAX_RELATIONAL_PRESSURE) || 5);
+    const clamp = value => Math.max(-limit, Math.min(limit, value));
+    prior.target = target.name;
+    prior.trust = clamp(prior.trust + deltas.trust);
+    prior.closeness = clamp(prior.closeness + deltas.closeness);
+    prior.conflict = clamp(prior.conflict + deltas.conflict);
+    prior.cues = unique(prior.cues.concat(triggers.filter(code => {
+      const rule = TRIGGER_RULES[code] || {};
+      return rule.trust || rule.closeness || rule.conflict;
+    })), 40).slice(-6);
+    prior.lastEventHash = eventHash;
+    prior.updatedClock = nextClock;
+    npc.pressures[target.key] = prior;
+    return ["trust", "closeness", "conflict"].filter(field => deltas[field]);
+  }
+
+  function applyStateCandidate(owner, candidate, nextClock, plan, story) {
+    if (!owner || !candidate) return { ok: false, error: "State operation lacked its fixed owner or content." };
     const npc = CC.npcs[owner.key];
     if (!npc) return { ok: false, error: "State owner was not registered." };
     npc.state = normalizeState(npc.state, CC.stateClock);
-    const map = { f: "feeling", t: "thought", g: "goal", x: "tension" };
+
+    if (candidate.fields) {
+      const map = { f: "feeling", t: "thought", g: "goal", x: "tension" };
+      const changed = [];
+      const ignored = [];
+      Object.entries(candidate.fields).forEach(([code, supplied]) => {
+        const field = map[code];
+        if (!field) return;
+        if (code === "t" && supplied !== "~" && !firstPersonThought(supplied)) {
+          ignored.push("Thought");
+          return;
+        }
+        const value = supplied === "~" ? "" : line(supplied, settings.MAX_STATE_VALUE_CHARS || 120);
+        if (value === npc.state[field].value) return;
+        npc.state[field] = { value, updatedClock: nextClock };
+        changed.push(code);
+      });
+      if (!changed.length) return { ok: false, error: ignored.length ? "Temporary Thought was not first person and no other valid field changed." : "State snapshot did not change any field." };
+      return {
+        ok: true,
+        summary: owner.name + "/legacy State " + changed.join(","),
+        evidence: "grounded subtext",
+        source: "completed response and live context",
+        warning: ignored.length ? "Ignored invalid " + ignored.join(", ") + " while applying other State fields." : ""
+      };
+    }
+
+    const target = targetForCode(plan, candidate.targetCode);
+    if (!target) return { ok: false, error: "Thought trigger used a target that was not authorized for this owner." };
+    const triggers = triggerList(candidate.triggers);
+    if (!triggers.length) return { ok: false, error: "Thought trigger operation contained no supported triggers." };
+    const thought = line(candidate.thought, settings.MAX_STATE_VALUE_CHARS || 120);
+    const validThought = firstPersonThought(thought);
+    const priorSignature = [npc.state.target.key, npc.state.triggers.value.join(","), npc.state.thought.value].join("|");
+    const nextSignature = [target.key, triggers.join(","), validThought ? thought : npc.state.thought.value].join("|");
+    if (priorSignature === nextSignature) return { ok: false, error: "Thought and trigger State already matched the stored snapshot." };
+
+    const derived = derivedStateFromTriggers(triggers);
     const changed = [];
-    Object.entries(candidate.fields).forEach(([code, supplied]) => {
-      const field = map[code];
-      if (!field) return;
-      const value = supplied === "~" ? "" : line(supplied, settings.MAX_STATE_VALUE_CHARS || 96);
-      if (value === npc.state[field].value) return;
+    [["feeling", derived.feeling], ["goal", derived.goal], ["tension", derived.tension]].forEach(([field, value]) => {
+      if (npc.state[field].value === value) return;
       npc.state[field] = { value, updatedClock: nextClock };
-      changed.push(code);
+      changed.push(field.charAt(0));
     });
-    if (!changed.length) return { ok: false, error: "State snapshot did not change any field." };
-    return { ok: true, summary: owner.name + "/State " + changed.join(","), evidence: "grounded subtext", source: "completed response and live context" };
+    if (validThought && npc.state.thought.value !== thought) {
+      npc.state.thought = { value: thought, updatedClock: nextClock };
+      changed.push("t");
+    }
+    npc.state.triggers = { value: triggers, updatedClock: nextClock };
+    npc.state.target = { key: target.key, name: target.name, updatedClock: nextClock };
+    const pressureFields = applyTriggerPressure(npc, target, triggers, nextClock, story);
+    const partial = !validThought;
+    return {
+      ok: true,
+      summary: owner.name + "/State " + unique(changed.concat(pressureFields.map(field => "p:" + field)), 30).join(","),
+      evidence: "Thought triggers " + triggers.join(", "),
+      source: "completed response and live context",
+      warning: partial ? "Applied trigger-derived State but ignored a missing or non-first-person Thought." : ""
+    };
   }
 
   function registrationCoreEntry(entry, fields) {
@@ -1822,6 +2161,18 @@ function CharacterContinuity(hook, incomingText) {
       existing.targetKey = target.key;
       npc.relationships[target.key] = normalizeRelationship(existing, target.key);
     }
+    if (target.key !== "self" && npc.pressures[target.key]) {
+      const pressure = normalizePressure(npc.pressures[target.key], target.key);
+      if (pressure) {
+        if (candidate.key === "u") pressure.trust = 0;
+        if (candidate.key === "c") pressure.closeness = 0;
+        if (["r", "x", "b"].includes(candidate.key)) pressure.conflict = 0;
+        pressure.cues = [];
+        pressure.updatedClock = CC.stateClock;
+        if (!pressure.trust && !pressure.closeness && !pressure.conflict) delete npc.pressures[target.key];
+        else npc.pressures[target.key] = pressure;
+      }
+    }
     return {
       ok: true,
       summary: owner.name + (target.key === "self" ? "" : "→" + target.name) + "/" + candidate.key,
@@ -1847,7 +2198,7 @@ function CharacterContinuity(hook, incomingText) {
     const focusName = characters.find(character => character.key === CC.focusKey)?.name || "None";
     const evidenceStatus = characters.map(character => {
       const count = ownerObservationCount(character.key);
-      return character.name + " " + count + "/" + runtime.durableObservations + (count >= runtime.durableObservations ? " ready" : "");
+      return character.name + " " + count + "/" + runtime.durableObservations + (ownerReadyForReview(character.key) ? " ready" : "");
     }).join("; ") || "None";
     const stateStatus = characters.map(character => {
       const state = normalizeState(CC.npcs[character.key] && CC.npcs[character.key].state, CC.stateClock);
@@ -1855,18 +2206,24 @@ function CharacterContinuity(hook, incomingText) {
         .filter(([, field]) => state[field].value)
         .map(([label]) => label)
         .join("");
-      return character.name + " " + (present || "empty");
+      return character.name + " " + (present || "empty") + (state.triggers.value.length ? " [" + state.triggers.value.join(",") + "]" : "");
     }).join("; ") || "None";
+    const pressureStatus = characters.flatMap(character => ownerPressures(character.key).filter(item => item.trust || item.closeness || item.conflict).map(item => (
+      character.name + "→" + (item.target || item.targetKey) + " T" + (item.trust >= 0 ? "+" : "") + item.trust
+      + "/C" + (item.closeness >= 0 ? "+" : "") + item.closeness
+      + "/X" + (item.conflict >= 0 ? "+" : "") + item.conflict
+    ))).join("; ") || "None";
     const queued = uncheckedQueueEntries().map(entry => entry.name).join(", ") || "None";
     const warning = [runtime.warning, CC.last.warning, CC.last.error].filter(Boolean).join(" ") || "None";
     const entry = [
-      "Character Continuity v5.1.1",
-      "Architecture: staggered focus, expiring State snapshots, durable persistence, and opt-in NPC onboarding",
+      "Character Continuity v5.1.2",
+      "Architecture: model-authored private Thought, script-derived trigger State, pressure-gated durable persistence, and opt-in NPC onboarding",
       "Registered / scene-active / focus: " + characters.length + " / " + (activeNames.join(" → ") || "None") + " / " + focusName,
       "Queued NPCs: " + queued,
       "Player: " + player.name + " | " + [player.subject, player.object, player.possessiveAdjective, player.possessivePronoun, player.reflexive].join("/"),
       "Story turns / genuine inputs: " + CC.visibleGenerationCount + " / " + CC.inputCount,
       "Temporary State (F/T/G/X): " + stateStatus + "; clock " + CC.stateClock + "; lifetime " + runtime.stateLifetime,
+      "Relational pressure (trust/closeness/conflict): " + pressureStatus,
       "Durable evidence: " + evidenceStatus,
       "Review cooldown: " + CC.reviewCooldown + "; last task: " + CC.last.task + (CC.last.owner ? " for " + CC.last.owner : ""),
       "Last candidate / update: " + CC.last.candidate + " / " + CC.last.update,
@@ -1878,7 +2235,7 @@ function CharacterContinuity(hook, incomingText) {
       "Last output: " + CC.last.output,
       "Warning: " + warning
     ].join("\n");
-    upsertCard(settings.STATUS_TITLE || "Character Continuity Status", entry, "Compact v5.1.1 runtime status.", "status");
+    upsertCard(settings.STATUS_TITLE || "Character Continuity Status", entry, "Compact v5.1.2 runtime status.", "status");
 
     const debugCard = findCard(settings.DEBUG_TITLE || "Character Continuity Debug");
     if (!runtime.debug) {
@@ -1888,7 +2245,7 @@ function CharacterContinuity(hook, incomingText) {
     const evidenceEntries = Object.values(CC.durableEvidence || {}).reduce((sum, items) => sum + (Array.isArray(items) ? items.length : 0), 0);
     const evidenceChars = Object.values(CC.durableEvidence || {}).reduce((sum, items) => sum + (Array.isArray(items) ? items.reduce((part, item) => part + textOf(item && item.text).length, 0) : 0), 0);
     const debugEntry = [
-      "Character Continuity v5.1.1 debug",
+      "Character Continuity v5.1.2 debug",
       "Schema / v4.4 cutover: " + CC.schemaVersion + " / " + (CC.cutoverFromV44 ? "Yes" : "No"),
       "Maximum scene-active NPCs / State lifetime / observations / cooldown: " + runtime.maxActive + " / " + runtime.stateLifetime + " / " + runtime.durableObservations + " / " + runtime.reviewCooldown,
       "Focus last served: " + characters.map(character => character.name + "=" + (CC.focusLastServed[character.key] ?? "never")).join(", "),
@@ -1896,6 +2253,8 @@ function CharacterContinuity(hook, incomingText) {
       "Output anchor / registration transaction: " + (CC.lastVisibleOutputAnchor ? "Present" : "None") + " / " + (CC.registrationTransaction ? CC.registrationTransaction.name : "None"),
       "Owner evidence entries / characters / rejected ledger: " + evidenceEntries + " / " + evidenceChars + " / " + (CC.rejectedEvidence || []).length,
       "Evidence source: " + CC.last.evidence,
+      "Evidence admission: " + CC.last.evidenceAdmission,
+      "CC5 parse: " + CC.last.protocol,
       "Injected continuity tokens: " + CC.last.injectedTokens,
       "Error: " + (CC.last.error || "None")
     ].join("\n");
@@ -1908,6 +2267,7 @@ function CharacterContinuity(hook, incomingText) {
       relationshipTokens: 0, memoryTokens: 0, taskTokens: 0, reserveTokens: 0,
       injectedTokens: 0, headroomTokens: runtime.contextCeiling, recentStoryChars: 0,
       task: "none", owner: "", candidate: "not requested", update: "None", evidence: "None",
+      protocol: "None", evidenceAdmission: "None",
       timeJumpReset: false,
       gracefulFallback: false
     });
@@ -2051,11 +2411,11 @@ function CharacterContinuity(hook, incomingText) {
       taskText = registrationTask(onboarding);
     } else if (owner && !plan.opening && !plan.startupGrace && !plan.retry && CC.reviewCooldown <= 0 && ownerReadyForReview(owner.key)) {
       task = "durable";
-      reviewSupplement = evidenceSupplement(owner, recent);
+      reviewSupplement = [pressureSupplement(owner), evidenceSupplement(owner, recent)].filter(Boolean).join("\n");
       taskText = durableTask(owner, active, reviewSupplement);
     } else if (owner && !plan.opening && !plan.startupGrace && !plan.retry) {
       task = "state";
-      taskText = stateTask(owner);
+      taskText = stateTask(owner, active);
     }
 
     let attempt = assembleContext(originalText, active, focus, source, task, taskText);
@@ -2128,6 +2488,9 @@ function CharacterContinuity(hook, incomingText) {
     }
 
     const parsed = parseTerminalCandidate(outputValue, plan);
+    CC.last.protocol = parsed.hadProtocol
+      ? parsed.reason + (parsed.raw ? " Record: " + line(parsed.raw, 180) : "")
+      : "No CC5 record";
     const story = parsed.story.trim();
     if (!hasCompleteStory(story)) {
       CC.recoveryPending = true;
@@ -2145,17 +2508,19 @@ function CharacterContinuity(hook, incomingText) {
     const owner = characters.find(character => character.key === plan.ownerKey) || null;
     const focus = characters.find(character => character.key === plan.focusKey) || owner || null;
 
-    if (parsed.malformed) {
+    if (plan.retry && parsed.hadProtocol) {
+      CC.last.candidate = "suppressed on Retry";
+      CC.last.error = "";
+      CC.last.warning = "";
+    } else if (parsed.malformed) {
       CC.last.candidate = "malformed stripped";
-      CC.last.error = "A malformed or misplaced CC5 record was stripped while complete story survived.";
+      CC.last.error = parsed.reason || "A malformed CC5 record was stripped while complete story survived.";
     } else if (!parsed.candidate) {
       CC.last.candidate = plan.taskDelivered ? "absent/no update" : "not requested";
     } else if (parsed.candidate.scope === "state") {
-      result = plan.retry
-        ? { ok: false, error: "Retry cannot update or age Temporary State." }
-        : (plan.task === "state" && owner && !storyTimeJump
-          ? applyStateCandidate(owner, parsed.candidate, nextStateClock)
-          : { ok: false, error: storyTimeJump ? "A time jump cleared State and blocked the pre-jump snapshot." : "Temporary State was not authorized for this generation." });
+      result = plan.task === "state" && owner && !storyTimeJump
+        ? applyStateCandidate(owner, parsed.candidate, nextStateClock, plan, story)
+        : { ok: false, error: storyTimeJump ? "A time jump cleared State and blocked the pre-jump snapshot." : "Temporary State was not authorized for this generation." };
     } else if (parsed.candidate.scope === "registration") {
       result = plan.retry
         ? { ok: false, error: "Retry cannot register an NPC." }
@@ -2174,6 +2539,10 @@ function CharacterContinuity(hook, incomingText) {
         CC.last.update = result.summary;
         CC.last.evidence = result.source + ": " + line(result.evidence, 160);
         CC.last.error = "";
+        if (result.warning) CC.last.warning = result.warning;
+        if (parsed.normalized) {
+          CC.last.warning = (CC.last.warning ? CC.last.warning + " " : "") + parsed.reason;
+        }
       } else {
         CC.last.candidate = "rejected";
         CC.last.error = result.error;
@@ -2193,20 +2562,34 @@ function CharacterContinuity(hook, incomingText) {
     }
     if (!plan.retry) {
       const deliveredReview = !!(owner && plan.taskDelivered && plan.task === "durable");
+      const activeCharacters = (plan.activeKeys || []).map(key => characters.find(character => character.key === key)).filter(Boolean);
+      const portrayed = !!(focus && ownerPortrayed(focus, story, activeCharacters));
+      CC.last.evidenceAdmission = focus
+        ? (portrayed ? "Accepted for " + focus.name : "Skipped; " + focus.name + " was not portrayed in generated prose")
+        : "No focused owner";
       if (deliveredReview) {
         CC.ownerLastDurableAttempt[owner.key] = nextGeneration;
-        CC.durableEvidence[owner.key] = [];
+        const durableAccepted = !!(result && result.ok && parsed.candidate && parsed.candidate.scope === "durable");
+        if (durableAccepted) CC.durableEvidence[owner.key] = [];
+        else if (portrayed) appendOwnerEvidence(owner.key, story, nextGeneration);
         CC.reviewCooldown = runtime.reviewCooldown;
-      } else if (focus) {
+      } else if (focus && portrayed) {
         appendOwnerEvidence(focus.key, story, nextGeneration);
+      } else if (focus) {
+        CC.last.warning = (CC.last.warning ? CC.last.warning + " " : "")
+          + "Durable evidence did not advance because the focused owner was absent from generated prose.";
       }
       if (!deliveredReview && CC.reviewCooldown > 0) CC.reviewCooldown -= 1;
     }
     plan.completed = true;
     CC.lastVisibleOutputAnchor = outputAnchorFor(story, plan);
-    CC.last.output = result && result.ok
+    CC.last.output = CC.last.candidate === "suppressed on Retry"
+      ? "Complete replacement story survived; Retry-generated CC5 debris was suppressed without changing continuity."
+      : result && result.ok
       ? "Complete story survived and " + (parsed.candidate.scope === "state" ? "Temporary State" : (parsed.candidate.scope === "registration" ? "one review-pending NPC profile" : "one durable update")) + " was applied for the following response."
-      : "Complete story survived; " + (CC.last.candidate === "absent/no update" ? "no update candidate was returned." : (CC.last.candidate === "not requested" ? "no update was scheduled." : "no continuity change was applied."));
+      : "Complete story survived; " + (CC.last.candidate === "absent/no update"
+        ? (plan.task === "durable" ? "no update candidate was returned; eligible review evidence was retained." : "no update candidate was returned.")
+        : (CC.last.candidate === "not requested" ? "no update was scheduled." : "no continuity change was applied."));
     return story;
   }
 
