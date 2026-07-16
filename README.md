@@ -1,16 +1,25 @@
-# Character Continuity v5.1.0 Open Beta
+# Character Continuity v5.1.1 Open Beta
 
-## Stateful Onboarding and Retry Rollback — Creator Guide
+## Protocol Placement Guard — Creator Guide
 
 Character Continuity helps AI Dungeon portray recurring NPCs consistently while allowing temporary inner state, lasting decisions, relationships, memories, and development to survive beyond the immediate scene.
 
-v5.1 combines three layers:
+v5.1.1 combines three layers:
 
 - **Staggered portrayal:** up to five scene-active NPCs receive individual guidance while one receives deeper focus.
 - **Temporary State:** compact snapshots track Feeling, private Thought, current Goal, and Tension.
 - **Durable persistence:** stricter periodic reviews may record lasting personal or relational change.
 
-It also adds opt-in onboarding for NPCs encountered during play and detects Retry from replacement of the last visible output, even when AI Dungeon does not rerun the Input modifier.
+It also includes opt-in onboarding for NPCs encountered during play and detects Retry from replacement of the last visible output, even when AI Dungeon does not rerun the Input modifier.
+
+### What v5.1.1 repairs
+
+v5.1.1 removes a conflicting shared instruction that told the model every authorized record belonged at the end of the response. Record authorization and placement are now operation-specific:
+
+- Temporary State and NPC-registration records must be the first nonblank output line, before story.
+- Durable records must be the last nonblank output line, after complete story.
+- A generation without an authorized operation—including Retry—explicitly forbids every CC5 record.
+- Misplaced or malformed records are stripped while complete story survives, but they do not change continuity.
 
 This is an open beta. Test it in a copy of an adventure and back up important cards before updating.
 
@@ -18,7 +27,7 @@ This is an open beta. Test it in a copy of an adventure and back up important ca
 
 ## Quick setup
 
-1. Add the Character Continuity v5.1 script as a Library.
+1. Add the Character Continuity v5.1.1 script as a Library.
 2. Connect it once to each Input, Context, and Output modifier.
 3. Create `CC CORE: Full Name` for NPCs known at scenario start.
 4. For NPCs to be discovered later, add their names to `CC NPC QUEUE` instead.
@@ -111,7 +120,7 @@ Optional details may be supplied after the name:
 The flow is:
 
 1. CC waits until the exact queued name appears in current input or Recent Story.
-2. On an eligible generation, the model may return one compact hidden registration snapshot based only on available story context.
+2. On an eligible generation, the model may return one compact hidden registration snapshot as the first nonblank output line, based only on available story context.
 3. Complete story prose must also survive. A registration-only response creates nothing and triggers prose recovery.
 4. CC creates an editable `CC CORE: Name`, an optional `CC VOICE: Name`, and the normal managed cards.
 5. The queue line changes to `[x]`, and the NPC can become scene-active on the following generation.
@@ -172,7 +181,7 @@ Tension: Wants authority but fears overstepping
 
 `Thought` is always a short first-person private thought in the NPC's own voice. It need not be spoken or explicitly narrated; grounded subtext may be inferred from Core, Voice, relationships, current input, and Recent Story.
 
-On an eligible focused turn, the model may return one hidden leading snapshot containing any supported combination of the four fields. Only changed fields are returned. Unchanged fields keep their own ages, so refreshing Goal does not refresh an old Feeling or Thought.
+On an eligible focused turn, the model may return one hidden leading snapshot as the first nonblank output line, containing any supported combination of the four fields. Only changed fields are returned. Unchanged fields keep their own ages, so refreshing Goal does not refresh an old Feeling or Thought.
 
 State rules:
 
@@ -196,13 +205,13 @@ Temporary reactions do not automatically become lasting continuity. Durable pers
 3. **Review:** once enough observations exist, a review waits until that NPC is focused and the global cooldown is clear.
 4. **Reset:** after a delivered review, that owner's reviewed evidence resets whether or not anything was stored.
 
-Only one owner can receive a durable review in a response. The model may append one short final hidden record after complete story, but no record is correct when no lasting change was established.
+Only one owner can receive a durable review in a response. The model may append one short hidden record as the last nonblank output line after complete story, but no record is correct when no lasting change was established.
 
 Player input alone is never durable evidence. Generated story must support the stored change. Explicit acceptance or refusal of an ongoing responsibility can support a Role update even when the dialogue is brief.
 
 ## Retry and revisions
 
-v5.1 saves a fingerprint of each complete visible output and its pre-generation continuity snapshot. At the next Context call:
+v5.1.1 saves a fingerprint of each complete visible output and its pre-generation continuity snapshot. At the next Context call:
 
 - If the prior output still exists unchanged, generation proceeds normally.
 - If it was removed or changed, CC restores the snapshot and treats the generation as Retry or revision.
@@ -212,6 +221,7 @@ Retry:
 - repeats the original focus and active cast;
 - occupies the discarded story-turn position rather than adding a new one;
 - cannot request or apply State, durable persistence, or NPC registration;
+- explicitly instructs the model to output complete story only and no CC5 record;
 - cannot add durable evidence, consume cooldown, or age State;
 - retains the same rollback anchor across consecutive Retries.
 
@@ -281,6 +291,8 @@ The Status card reports:
 **An owner is `ready` but not reviewed:** The owner must be focused, cooldown must be zero, and the review task must fit.
 
 **A review stores nothing:** This is normal when evidence describes only a temporary reaction, repeats continuity, or establishes no lasting change.
+
+**Status says `malformed stripped`:** The model returned malformed metadata or put a valid-looking record in the wrong place. Complete prose survives, but no continuity change is applied. Save the complete output and Status card before retrying or reporting it.
 
 **A CC5 line becomes visible:** Treat it as a beta bug. Save the complete output and Status card before retrying.
 
