@@ -1,25 +1,29 @@
-# Character Continuity v5.1.1 Open Beta
+# Character Continuity v5.1.2 Open Beta
 
-## Protocol Placement Guard — Creator Guide
+## Thought Triggers and Reliable Persistence — Creator Guide
 
 Character Continuity helps AI Dungeon portray recurring NPCs consistently while allowing temporary inner state, lasting decisions, relationships, memories, and development to survive beyond the immediate scene.
 
-v5.1.1 combines three layers:
+v5.1.2 combines four layers:
 
 - **Staggered portrayal:** up to five scene-active NPCs receive individual guidance while one receives deeper focus.
-- **Temporary State:** compact snapshots track Feeling, private Thought, current Goal, and Tension.
+- **Thought-trigger State:** the model writes one private, first-person Thought and selects controlled triggers; the script derives compact Feeling, Goal, Tension, and temporary relational pressure.
 - **Durable persistence:** stricter periodic reviews may record lasting personal or relational change.
+- **Opt-in onboarding:** queued NPCs can receive editable Core and Voice cards from supported story context.
 
-It also includes opt-in onboarding for NPCs encountered during play and detects Retry from replacement of the last visible output, even when AI Dungeon does not rerun the Input modifier.
+It also detects Retry from replacement of the last visible output, even when AI Dungeon does not rerun the Input modifier.
 
-### What v5.1.1 repairs
+### What v5.1.2 changes
 
-v5.1.1 removes a conflicting shared instruction that told the model every authorized record belonged at the end of the response. Record authorization and placement are now operation-specific:
+v5.1.2 replaces the model-authored four-field State snapshot with a smaller and more reliable division of work:
 
-- Temporary State and NPC-registration records must be the first nonblank output line, before story.
-- Durable records must be the last nonblank output line, after complete story.
-- A generation without an authorized operation—including Retry—explicitly forbids every CC5 record.
-- Misplaced or malformed records are stripped while complete story survives, but they do not change continuity.
+- The model supplies subtext that requires interpretation: one first-person private Thought, a target, and one to three controlled triggers.
+- The script deterministically derives Feeling, Goal, Tension, and temporary trust, closeness, or conflict pressure.
+- Leading, inline, and terminal hidden records are normalized safely instead of making harmless placement variation fatal.
+- A malformed Thought does not discard valid trigger-derived State.
+- Direct interaction outranks incidental name mentions for focus, and absent focus owners no longer gain evidence.
+- A durable review that returns no update retains its evidence, waits for one new owner-specific observation, and may review again later.
+- Retry-generated hidden-record debris is suppressed without changing continuity or producing a false runtime error.
 
 This is an open beta. Test it in a copy of an adventure and back up important cards before updating.
 
@@ -27,7 +31,7 @@ This is an open beta. Test it in a copy of an adventure and back up important ca
 
 ## Quick setup
 
-1. Add the Character Continuity v5.1.1 script as a Library.
+1. Add the Character Continuity v5.1.2 script as a Library.
 2. Connect it once to each Input, Context, and Output modifier.
 3. Create `CC CORE: Full Name` for NPCs known at scenario start.
 4. For NPCs to be discovered later, add their names to `CC NPC QUEUE` instead.
@@ -161,57 +165,78 @@ CC recognizes up to five scene-active NPCs from current input, Recent Story, and
 For each response, CC:
 
 1. Finds registered NPCs involved in the scene.
-2. Prioritizes direct involvement, current or recent presence, and Significance.
-3. Selects one focus NPC, preferring direct involvement and then the least recently served eligible NPC.
+2. Scores direct address and interaction more strongly than incidental name mentions, then considers current or recent presence and Significance.
+3. Selects one focus NPC, preferring the strongest direct involvement and then the least recently served eligible NPC.
 4. Supplies compact identity and any live State for every active NPC.
 5. Supplies deeper relevant relationships, memories, motives, boundaries, or Turning Points only for the focus NPC.
 
 Player actions and Continue both participate in focus rotation. Retry repeats the discarded turn's active cast and focus.
 
-## Temporary State snapshots
+## Thought-trigger Temporary State
 
 Each managed `CC STATE: Name` card can contain:
 
 ```text
-Feeling: cautiously hopeful
-Thought: I want the responsibility—and I hate how much it matters.
-Goal: Clarify what equal authority means
-Tension: Wants authority but fears overstepping
+Feeling: nostalgic
+Thought: I hope she remembers the good parts, not just the creaky floorboards.
+Goal: Revisit shared history
+Tension:
+Triggers: nostalgia, reconnect
+Target: Azure
+Relational pressure: Azure — closeness +1
 ```
 
-`Thought` is always a short first-person private thought in the NPC's own voice. It need not be spoken or explicitly narrated; grounded subtext may be inferred from Core, Voice, relationships, current input, and Recent Story.
+The model no longer writes all four State fields. On an eligible focused turn, it may return one compact hidden operation containing:
 
-On an eligible focused turn, the model may return one hidden leading snapshot as the first nonblank output line, containing any supported combination of the four fields. Only changed fields are returned. Unchanged fields keep their own ages, so refreshing Goal does not refresh an old Feeling or Thought.
+- one short first-person private `Thought` in the NPC's own voice;
+- one target: self, player, or another scene-active NPC;
+- one to three controlled trigger codes.
+
+The script validates and stores the Thought, then deterministically derives Feeling, Goal, Tension, and any temporary relational pressure from the triggers. Grounded private subtext may be inferred from Core, Voice, relationships, current input, and Recent Story, but it cannot invent an event or control the player.
+
+The controlled vocabulary is:
+
+| Group | Trigger codes |
+|---|---|
+| Affect | `affection`, `anger`, `anxiety`, `curiosity`, `grief`, `hope`, `hurt`, `relief`, `resolve`, `uncertainty` |
+| Direction | `nostalgia`, `protect`, `reconnect`, `withdraw`, `responsibility`, `conflict` |
+| Relationship | `trust_gain`, `trust_loss`, `closeness_gain`, `closeness_loss`, `boundary_respected`, `boundary_crossed`, `repair`, `betrayal` |
+
+The strongest supported trigger comes first. Unknown triggers are ignored, and only the first three valid triggers are used. The script's mapping is fixed: for example, `nostalgia` derives a nostalgic Feeling and a Goal to revisit shared history; `boundary_crossed` derives an unsafe and angry Feeling, a Goal to reassert the boundary, and temporary trust/conflict pressure.
+
+Relational pressure is working continuity, not a durable trust score. It is capped, ages out with State, clears on a time jump, and may only make a durable relationship review eligible when at least one owner-specific generated-story observation also exists. The generated story must still support any lasting update.
 
 State rules:
 
 - Complete story is mandatory; metadata can never replace prose.
 - One fixed focus owner may update per generation.
 - No State snapshot is requested during startup grace, Retry, prose recovery, durable review, or NPC registration.
-- Unsupported fields stay empty rather than being invented.
+- The operation updates the whole trigger-derived working snapshot. Existing State remains unchanged when no operation is returned.
+- A missing or invalid first-person Thought is ignored without discarding otherwise valid trigger-derived fields.
 - State cannot decide the player's actions, feelings, consent, commitments, or relationship response.
-- Each field expires independently after the configured number of successful non-Retry generations unless refreshed.
-- Explicit time jumps clear prior temporary State.
-- Retry restores the pre-generation State and neither updates nor ages it.
+- Each stored field and relational pressure retains an update clock and expires after the configured number of successful non-Retry generations unless refreshed.
+- Explicit time jumps clear prior temporary State and relational pressure.
+- Retry restores the pre-generation State and pressure and neither updates nor ages them.
 
-Manual edits to `CC STATE` are supported. Keep the four field labels intact.
+Manual edits to `CC STATE` are supported. A populated creator-made State card is imported before CC's first managed write instead of being overwritten. Keep the field labels intact.
 
 ## Durable persistence
 
 Temporary reactions do not automatically become lasting continuity. Durable persistence remains stricter:
 
-1. **Observe:** a completed response focused on an NPC becomes that owner's generated-story evidence.
+1. **Observe:** a completed response focused on an NPC becomes that owner's generated-story evidence only when that NPC is actually portrayed.
 2. **Accumulate:** later focused responses build a small evidence window.
-3. **Review:** once enough observations exist, a review waits until that NPC is focused and the global cooldown is clear.
-4. **Reset:** after a delivered review, that owner's reviewed evidence resets whether or not anything was stored.
+3. **Schedule:** enough observations normally mature a review. Strong temporary trust, closeness, or conflict pressure may schedule it earlier, but never without at least one owner-specific observation.
+4. **Review:** the review waits until that NPC is focused and the global cooldown is clear.
+5. **Resolve:** an accepted update clears reviewed evidence and matching pressure. An absent or rejected update retains the evidence, records the attempt, and waits for one new owner-specific observation before reviewing again.
 
 Only one owner can receive a durable review in a response. The model may append one short hidden record as the last nonblank output line after complete story, but no record is correct when no lasting change was established.
 
-Player input alone is never durable evidence. Generated story must support the stored change. Explicit acceptance or refusal of an ongoing responsibility can support a Role update even when the dialogue is brief.
+Player input and relational pressure are never durable evidence. Generated story must support the stored change. Newly revealed lasting memories, explicit acceptance or refusal of an ongoing responsibility, established boundaries, and supported relationship changes can all qualify. A temporary mood, inferred private Thought, or pressure value alone cannot.
 
 ## Retry and revisions
 
-v5.1.1 saves a fingerprint of each complete visible output and its pre-generation continuity snapshot. At the next Context call:
+v5.1.2 saves a fingerprint of each complete visible output and its pre-generation continuity snapshot. At the next Context call:
 
 - If the prior output still exists unchanged, generation proceeds normally.
 - If it was removed or changed, CC restores the snapshot and treats the generation as Retry or revision.
@@ -221,7 +246,7 @@ Retry:
 - repeats the original focus and active cast;
 - occupies the discarded story-turn position rather than adding a new one;
 - cannot request or apply State, durable persistence, or NPC registration;
-- explicitly instructs the model to output complete story only and no CC5 record;
+- requests complete story only; if the model or host repeats discarded hidden-record debris anyway, CC strips and suppresses it without treating it as a continuity change or runtime error;
 - cannot add durable evidence, consume cooldown, or age State;
 - retains the same rollback anchor across consecutive Retries.
 
@@ -235,7 +260,7 @@ Edit values after the colon in `Configure Character Continuity` and keep the lab
 |---|---|
 | `Enabled` | `false` disables injection and updates while preserving cards. |
 | `Context ceiling` | Maximum estimated tokens used by the continuity packet and optional task. Default: `1400`. |
-| `Temporary State lifetime` | Successful non-Retry generations before an unrefreshed field expires. Default: `3`. |
+| `Temporary State lifetime` | Successful non-Retry generations before an unrefreshed State field or relational pressure expires. Default: `3`. |
 | `Durable observations before review` | Focused completed responses required for an owner to mature. Default: `2`. |
 | `Prose-only turns after review` | Successful turns required before another owner may review. Default: `1`. |
 | `Turning Points` | `growth-only`, `all-directions`, or `disabled`. |
@@ -244,13 +269,13 @@ Edit values after the colon in `Configure Character Continuity` and keep the lab
 
 The ceiling applies only to CC's injection, not the model's total context window. Optional details are omitted before essential active-NPC identity. If an optional State, registration, or durable task cannot fit safely, it is deferred and story proceeds.
 
-There is no hard output-token minimum. State and registration snapshots do consume some output space when returned. At very short output settings, complete prose remains protected and a missing snapshot leaves existing continuity unchanged. If snapshots are repeatedly absent, test a longer ordinary output setting before reporting a persistence failure.
+There is no hard output-token minimum. Thought-trigger and registration operations consume some output space when returned, though the Thought-trigger operation is smaller than the old four-field snapshot. At very short output settings, complete prose remains protected and a missing operation leaves existing continuity unchanged. If operations are repeatedly absent, test a longer ordinary output setting before reporting a persistence failure.
 
 ## Managed cards
 
 CC creates and maintains:
 
-- `CC STATE: Name` — expiring Feeling, private Thought, Goal, and Tension.
+- `CC STATE: Name` — expiring Thought-trigger State plus temporary relational pressure.
 - `CC CONTINUITY: Name` — durable personal continuity.
 - `CC RELATIONSHIPS: Name` — durable directional relationships.
 - `CC MEMORY ARCHIVE: Name` — significant durable memories.
@@ -267,12 +292,14 @@ The first automatic model output is suppressed. The first genuine player action 
 The Status card reports:
 
 - Registered, queued, scene-active, and focused NPCs.
-- Which State fields exist for each NPC and the State clock/lifetime.
+- Which State fields and trigger codes exist for each NPC, the State clock/lifetime, and temporary trust/closeness/conflict pressure.
 - Durable evidence counts and review readiness.
 - Review cooldown and the last task owner.
 - Candidate and update results.
 - Context use by rules, NPC identity, State, relationships, memories, and task.
 - Retry, Continue, fallback, and time-jump handling.
+
+When Debug is enabled, it also reports whether the focus owner was admitted as generated-story evidence and the exact normalization or rejection reason for the most recent hidden record.
 
 ## Troubleshooting
 
@@ -284,15 +311,21 @@ The Status card reports:
 
 **An NPC is not scene-active:** Mention the registered name or an alias in current input or Recent Story. Check `Maximum active NPCs` and `Enabled`.
 
-**State is empty:** State updates are optional and owner-bound. The model may find no supported change, the field may have expired, or the turn may have been reserved for registration or durable review.
+**State is empty:** Thought-trigger updates are optional and owner-bound. The model may find no supported change, State may have expired, or the turn may have been reserved for registration or durable review.
 
-**Thought was rejected:** It must be explicitly first person and written as the NPC's private thought.
+**Thought was rejected:** It must be explicitly first person and written as the NPC's private thought. In v5.1.2, valid triggers may still update derived Feeling, Goal, Tension, or pressure even when only the Thought field is rejected.
+
+**The wrong NPC was focused:** Direct address and interaction cues should outrank an incidental mention. Save the action, output, Status, and Debug cards if they do not. Fair rotation is used after direct relevance is considered.
+
+**Evidence did not advance:** A focus assignment alone is insufficient. The completed story must actually portray that owner. This prevents a response about another NPC or only the environment from maturing the wrong character.
 
 **An owner is `ready` but not reviewed:** The owner must be focused, cooldown must be zero, and the review task must fit.
 
-**A review stores nothing:** This is normal when evidence describes only a temporary reaction, repeats continuity, or establishes no lasting change.
+**A review stores nothing:** This is normal when evidence describes only a temporary reaction, repeats continuity, or establishes no lasting change. v5.1.2 retains the evidence but requires one new owner-specific observation before another review, preventing an immediate review loop while allowing a later supported change to persist.
 
-**Status says `malformed stripped`:** The model returned malformed metadata or put a valid-looking record in the wrong place. Complete prose survives, but no continuity change is applied. Save the complete output and Status card before retrying or reporting it.
+**Status says `malformed stripped`:** The model returned a structurally invalid or unauthorized hidden record. Leading, inline, and terminal placement variations are normally normalized in v5.1.2. Complete prose survives, but an invalid operation does not change continuity. Debug includes the precise reason and captured record.
+
+**Status says `suppressed on Retry`:** This is expected containment when the model or host repeats hidden-record debris from the discarded generation. CC strips it and leaves continuity unchanged.
 
 **A CC5 line becomes visible:** Treat it as a beta bug. Save the complete output and Status card before retrying.
 
@@ -300,25 +333,33 @@ The Status card reports:
 
 ## Suggested open-beta tracks
 
-### Track A: State and voice
+### Track A: Thought-trigger State
 
-Use two or three active NPCs. Confirm that focus rotates, Thoughts remain first-person and character-specific, partial snapshots preserve unchanged fields, and fields expire independently.
+Use two or three active NPCs. Confirm that direct interaction selects the correct focus, Thoughts remain first-person and character-specific, triggers derive sensible Feeling/Goal/Tension, relational pressure targets the correct character, and all temporary data expires.
 
-### Track B: Durable maturation
+### Track B: Durable reliability
 
-Create one explicit lasting decision or relationship change. Watch evidence mature and confirm that a later review stores only generated-story-supported continuity.
+Exercise several lasting change types: a decision or responsibility, a newly revealed memory, a boundary, and a relationship change. Confirm that owner-specific evidence matures and the later review stores only generated-story-supported continuity.
 
-### Track C: Retry and consecutive Retry
+Then force one mature review to return no record. Confirm its evidence remains, no immediate review repeats, one new owner-specific portrayal makes a later review eligible, and a supported update can then persist.
+
+### Track C: Relational pressure
+
+Build repeated supported `trust_gain`, `trust_loss`, closeness, or conflict triggers toward the same target. Confirm pressure remains temporary, may schedule a review only alongside generated evidence, never becomes a durable update by itself, and clears after a matching accepted update or expiry.
+
+### Track D: Retry and consecutive Retry
 
 Retry a response that created State or a durable update. Confirm focus repeats, discarded continuity disappears, turn count does not gain an extra position, and a second Retry restores the same baseline again.
 
-### Track D: NPC onboarding
+If Retry output repeats a hidden record, confirm the record is stripped, Status reports suppression rather than an error, and no State, pressure, evidence, cooldown, or card changes occur.
+
+### Track E: NPC onboarding
 
 Begin with no Core cards, queue one name, and encounter that NPC. Confirm the review-pending Core is editable and activates next generation. Retry the registration once unchanged, then repeat after editing the generated Core to test both deletion and preservation paths.
 
-### Track E: Time jump
+### Track F: Time jump
 
-Create temporary State, make a clear multi-day or longer jump, and confirm State and scene carryover clear while durable continuity remains.
+Create temporary State and relational pressure, make a clear multi-day or longer jump, and confirm both temporary layers and scene carryover clear while durable continuity remains.
 
 ## Reporting beta issues
 
@@ -328,7 +369,8 @@ Useful details include:
 - Model and ordinary output setting.
 - Relevant Core or queue entry.
 - Scene-active NPCs and focus.
-- State fields, evidence counts, and cooldown.
+- State fields, triggers, target, relational pressure, evidence counts, and cooldown.
+- Debug evidence-admission and CC5 parse lines.
 - Normal action, Retry, Continue, or registration.
 - Expected and actual story/card result.
 - Complete Status card and Debug card when enabled.
@@ -341,7 +383,9 @@ Model and output setting:
 Normal action, Retry, Continue, or registration:
 Queued / scene-active NPCs / focus:
 State fields:
+State triggers / target / pressure:
 Evidence counts / review cooldown:
+Debug evidence admission / CC5 parse:
 What I expected:
 What happened:
 Time jump involved: Yes / No
@@ -352,4 +396,4 @@ Relevant card before/after:
 Other notes:
 ```
 
-The most important failures are lost prose, visible CC5 records, wrong-owner updates, Retry preserving discarded continuity, Retry deleting a player-edited generated profile, stale State surviving a time jump, temporary events becoming durable, or creator edits being overwritten.
+The most important failures are lost prose, visible CC5 records, wrong focus after direct interaction, absent owners gaining evidence, valid State repeatedly failing to apply, supported lasting changes repeatedly failing to persist, Retry preserving discarded continuity, Retry deleting a player-edited generated profile, stale State or pressure surviving a time jump, temporary pressure becoming durable by itself, or creator edits being overwritten.
