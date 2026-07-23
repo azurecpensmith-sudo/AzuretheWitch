@@ -90,7 +90,7 @@ const modifier = (text) => {
   return { text: CharacterContinuity("input", text) }
 }
 
-modifier(text)
+modifier(text);
 ```
 
 ### Context tab
@@ -100,7 +100,7 @@ const modifier = (text) => {
   return { text: CharacterContinuity("context", text) }
 }
 
-modifier(text)
+modifier(text);
 ```
 
 ### Output tab
@@ -110,7 +110,7 @@ const modifier = (text) => {
   return { text: CharacterContinuity("output", text) }
 }
 
-modifier(text)
+modifier(text);
 ```
 
 Save your changes in all four tabs.
