@@ -1,8 +1,43 @@
 # Character Continuity Stable v1.0.53
 
+Character Continuity Stable helps AI Dungeon keep registered NPCs recognizable and consistent while still allowing them to change naturally through the story.
+
+## Features
+
+### Characters and cast
+
+- **Creator-controlled foundations:** Each NPC uses an Outer card for identity and appearance, and an Inner card for personality, mannerisms, wants, fears, mental wounds, and principles. These creator-authored details remain the character's stable foundation.
+- **Player identity and pronouns:** The script uses the Player's chosen name and pronouns. Common pronouns need only two forms, while custom pronouns can use all five.
+- **NPC pronouns:** NPC pronouns are read from their Outer cards and used when the script prepares character-specific instructions.
+- **Player-agency guidance:** The model is reminded that only the Player controls the Player character's speech, actions, thoughts, feelings, consent, commitments, memories, boundaries, names, and relationship choices.
+- **Stable active roster:** Up to five NPCs can occupy the fixed `N1` to `N5` slots. A character keeps the same slot instead of being silently moved when the roster changes.
+- **Confirmed NPC onboarding:** A new name placed in an empty roster slot receives Outer and Inner templates. The NPC becomes active only after both templates are complete.
+- **Main and Side NPCs:** Main NPCs receive priority. Side NPCs can become Main through repeated interaction, while inactive Main NPCs can become Side. This automatic movement can be turned off to freeze the cast.
+
+### Continuity tracking
+
+- **Temporary private State:** The script tracks an NPC's current Thought, Feeling, Goal, Tension, Situation, what the State is About, and its triggers. State can concern Self, the Player, or another active NPC. It refreshes when supported by new events and expires when it becomes stale.
+- **Names and aliases:** The Player and NPCs can gain, adopt, retire, reject, or reactivate aliases. The script can also record who is allowed to use a name while keeping the canonical identity stable.
+- **Directional Relationships:** Each NPC can have a different relationship with the Player and with other NPCs. Relationship records can track Role, Trust, Closeness, Boundaries, and Conflict.
+- **Adjustable relationship pace:** Relationship development uses evidence and can run at a Balanced default pace or creator-configured values. A single event cannot freely rewrite an entire relationship.
+- **Directional Views:** NPCs can Love, Like, feel Neutral toward, Dislike, or Hate Self, the Player, another NPC, or another established subject. Forgotten Views can be buried and later recovered.
+- **Persistent Experiences:** A temporary Situation that receives enough separate confirmation can become a lasting Experience. Only Experiences relevant to the current scene are supplied to the model.
+- **Focused updates:** The script chooses one continuity task at a time—State, Name, Relationship, or View—so the instruction stays narrow and inexpensive.
+- **Automatic continuity cards:** The script creates and maintains its own Settings, roster, Status, State, Names, Relationships, Views, and Experiences cards. For character setup, the creator supplies the Player identity and each NPC's Outer and Inner foundations.
+
+### Reliability and context use
+
+- **Strict evidence checks:** A continuity change must use the exact evidence and target authorized for that turn. Unsupported changes are rejected without altering the saved continuity.
+- **Hidden control metadata:** The model's continuity record is validated and removed before the story reaches the player. Malformed or unauthorized records are stripped while complete story prose is preserved.
+- **Retry protection:** Retry restores the original owner, target, evidence, roster position, operation choice, and saved records instead of counting the discarded response as new progress.
+- **Relevant context only:** The script supplies the active characters and the continuity records most relevant to the current scene instead of loading every saved record every turn.
+- **Bounded context cost:** Continuity uses a 2,000-token budget by default, with a protected 1,800-token minimum. An operation task is capped at 600 tokens and the complete operation turn at 1,400 tokens. Creator-authored Outer and Inner cards are limited to 2,000 characters each.
+- **Automatic diagnostics:** `CC — Status` reports the active roster, latest operation, context use, warnings, and script version. Optional Debug cards provide more detail when troubleshooting.
+- **Clean opening behavior:** The Scenario opening is preserved, while only the first automatic AI response immediately after that opening is hidden.
+
 ## Installation and activation
 
-This guide explains how to install `Character-Continuity-Stable-v1.0.53` in an AI Dungeon Scenario and confirm that it is working.
+This guide explains how to install `Character-Continuity-Stable-v1.0.53.txt` in an AI Dungeon Scenario and confirm that it is working.
 
 For the easiest first setup, install it in a new or otherwise clean Scenario. The script was release-tested in a fresh Adventure.
 
@@ -10,7 +45,7 @@ For the easiest first setup, install it in a new or otherwise clean Scenario. Th
 
 You need:
 
-- The file `Character-Continuity-Stable-v1.0.53`
+- The file `Character-Continuity-Stable-v1.0.53` library section, available in this repository.
 - AI Dungeon open in a computer web browser
 - A Scenario that you can edit
 
@@ -36,7 +71,7 @@ The Library tab holds the main script. The other three tabs contain small connec
 
 ## Part 2: Install the main script
 
-1. Open the Library tab in this repository.
+1. Open `Character-Continuity-Stable-v1.0.53` library tab.
 2. Select everything in the file and copy it.
 3. In AI Dungeon, open the **Library** tab.
 4. Remove any placeholder code from that tab.
@@ -228,7 +263,7 @@ When both cards are complete, the script confirms the NPC, removes the pending m
 
 ### A script error appears
 
-- Make sure the entire `Library` file is in the Library tab.
+- Make sure the entire `.txt` file is in the Library tab.
 - Make sure the Library code was not also pasted into the other tabs.
 - Make sure each of the other tabs ends with `modifier(text)`.
 - Make sure `CharacterContinuity` is spelled exactly as shown in the connectors.
