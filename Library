@@ -1,5 +1,5 @@
 const CHARACTER_CONTINUITY_STABLE_SETTINGS = {
-  VERSION: "Character Continuity Stable v1.0.58",
+  VERSION: "Character Continuity Stable v1.0.59",
   OUTER_CHARACTER_LABEL: "Outer",
   INNER_CHARACTER_LABEL: "Inner",
   VIEWS_LABEL: "Views",
@@ -14,6 +14,8 @@ const CHARACTER_CONTINUITY_STABLE_SETTINGS = {
   STATUS_TITLE: "CC — Status",
   DEBUG_TITLE: "CC — Debug",
   CARD_TYPE: "Continuity",
+  CARD_KEY_PREFIX: "__CC_STABLE_CARD__:",
+  SCRIPT_CARD_TITLE: "Script Story Card",
 
   DEFAULT_ENABLED: true,
   DEFAULT_CONTINUITY_BUDGET: 2000,
@@ -213,7 +215,7 @@ function CharacterContinuity(hook, incomingText) {
     return (hash >>> 0).toString(16);
   }
 
-  function titleOf(card) {
+  function visibleTitleOf(card) {
     if (!card) return "";
     return line(typeof card.title === "string" ? card.title : "", 220);
   }
@@ -222,9 +224,129 @@ function CharacterContinuity(hook, incomingText) {
     return card && typeof card.entry === "string" ? card.entry : "";
   }
 
+  function encodedManagedTitle(value) {
+    return line(value, 220)
+      .replace(/%/g, "%25")
+      .replace(/,/g, "%2C");
+  }
+
+  function decodedManagedTitle(value) {
+    return line(value, 1000)
+      .replace(/%2C/gi, ",")
+      .replace(/%25/gi, "%")
+      .slice(0, 220);
+  }
+
+  function managedCardKey(title) {
+    const logicalTitle = line(title, 220);
+    return logicalTitle ? settings.CARD_KEY_PREFIX + encodedManagedTitle(logicalTitle) : "";
+  }
+
+  function managedTitleFromKey(value) {
+    const source = textOf(value).trim();
+    if (!source.startsWith(settings.CARD_KEY_PREFIX)) return "";
+    return decodedManagedTitle(source.slice(settings.CARD_KEY_PREFIX.length));
+  }
+
+  function defaultScriptCardTitle(value) {
+    return keyOf(value) === keyOf(settings.SCRIPT_CARD_TITLE);
+  }
+
+  function managedTitleFromEntry(card) {
+    const source = entryOf(card).replace(/\r/g, "");
+    if (!source.trim()) return "";
+
+    const profile = source.match(
+      /^\s*\{\s*(.+?)['’]s\s+(Outer|Inner)\s*:/i
+    );
+    if (profile) {
+      const label = keyOf(profile[2]) === "outer"
+        ? settings.OUTER_CHARACTER_LABEL
+        : settings.INNER_CHARACTER_LABEL;
+      return line(profile[1], 120) + " — " + label;
+    }
+
+    const stateProfile = source.match(
+      /^\s*\{\s*(.+?)['’]s\s+current\s+private\s+State\s*:/i
+    );
+    if (stateProfile) {
+      return line(stateProfile[1], 120) + " — " + settings.STATE_LABEL;
+    }
+
+    const headers = source.split("\n")
+      .map(row => row.trim())
+      .filter(row => row && row !== "{" && row !== "}")
+      .slice(0, 4);
+    if (headers.includes("Active NPC slots:")) return settings.ACTIVE_NPCS_TITLE;
+
+    for (const header of headers) {
+      const paged = header.match(
+        /^(.+?)['’]s\s+(Buried Views|Views|Names|Relationships)(?:\s+(\d+))?\s*:\s*$/i
+      );
+      if (paged) {
+        const owner = line(paged[1], 120);
+        const normalizedLabel = keyOf(paged[2]);
+        const label = normalizedLabel === "buried views"
+          ? settings.BURIED_VIEWS_LABEL
+          : (normalizedLabel === "views"
+            ? settings.VIEWS_LABEL
+            : (normalizedLabel === "names" ? settings.NAMES_LABEL : settings.RELATIONSHIPS_LABEL));
+        const page = paged[3] ? Number(paged[3]) : 1;
+        return owner + " — " + label + (Number.isSafeInteger(page) && page > 1 ? " " + page : "");
+      }
+
+      const experiences = header.match(
+        /^(.+?)['’]s\s+Experiences(?:\s+(\d+))?\s*:\s*$/i
+      );
+      if (experiences) {
+        const page = experiences[2] ? Number(experiences[2]) : 1;
+        return line(experiences[1], 120) + "'s " + settings.EXPERIENCES_LABEL
+          + (Number.isSafeInteger(page) && page > 1 ? " " + page : "");
+      }
+    }
+
+    if (hasSettingsField(source, "Enabled")
+      && hasSettingsField(source, "Continuity budget")
+      && hasSettingsField(source, "State lifetime")) {
+      return settings.SETTINGS_TITLE;
+    }
+    return "";
+  }
+
+  function titleOf(card) {
+    if (!card) return "";
+    const managedTitle = managedTitleFromKey(card.keys);
+    if (managedTitle) return managedTitle;
+    const visibleTitle = visibleTitleOf(card);
+    if (visibleTitle && !defaultScriptCardTitle(visibleTitle)) return visibleTitle;
+    const entryTitle = managedTitleFromEntry(card);
+    if (entryTitle) return entryTitle;
+    return line(card.keys, 220) || visibleTitle;
+  }
+
+  function restoreVisibleCardTitle(card, intendedTitle) {
+    const logicalTitle = line(intendedTitle, 220);
+    if (!card || !logicalTitle) return card;
+    try {
+      card.title = logicalTitle;
+    } catch (error) {
+      debug("Could not restore the visible Story Card title " + logicalTitle + ": " + error.message);
+    }
+    return card;
+  }
+
+  function managedCardIdentityMatches(card, intendedTitle) {
+    const logicalTitle = line(intendedTitle || titleOf(card), 220);
+    return !!(card && logicalTitle
+      && textOf(card.keys).trim() === managedCardKey(logicalTitle)
+      && keyOf(visibleTitleOf(card)) === keyOf(logicalTitle));
+  }
+
   function findCard(title) {
     const wanted = keyOf(title);
-    return cards.find(card => keyOf(titleOf(card)) === wanted) || null;
+    const wantedKey = managedCardKey(title);
+    return cards.find(card => keyOf(titleOf(card)) === wanted
+      || (wantedKey && textOf(card && card.keys).trim() === wantedKey)) || null;
   }
 
   function cardIndex(card) {
@@ -246,12 +368,15 @@ function CharacterContinuity(hook, incomingText) {
     return match ? line(match[1], 2000) : "";
   }
 
-  function updateCardAt(index, keys, entry, type) {
+  function updateCardAt(index, keys, entry, type, intendedTitle) {
     if (!Number.isInteger(index) || index < 0 || index >= cards.length) return null;
     const current = cards[index];
+    const logicalTitle = line(intendedTitle || titleOf(current), 220);
     const nextKeys = textOf(keys).trim()
       ? textOf(keys)
-      : (textOf(current && current.keys).trim() ? textOf(current.keys) : titleOf(current));
+      : (textOf(current && current.keys).trim()
+        ? textOf(current.keys)
+        : managedCardKey(logicalTitle));
     const nextEntry = typeof entry === "string" ? entry : entryOf(current);
     const nextType = textOf(type).trim()
       ? textOf(type)
@@ -259,43 +384,60 @@ function CharacterContinuity(hook, incomingText) {
     if (textOf(current && current.keys) === nextKeys
       && entryOf(current) === nextEntry
       && textOf(current && current.type) === nextType) {
-      return current;
+      return restoreVisibleCardTitle(current, logicalTitle);
     }
     try {
       updateStoryCard(index, nextKeys, nextEntry, nextType);
-      return cards[index] || null;
+      return restoreVisibleCardTitle(cards[index] || current, logicalTitle);
     } catch (error) {
       debug("Could not update " + (titleOf(current) || nextKeys) + " through the Story Card API: " + error.message);
       return null;
     }
   }
 
-  function saveCard(card, entry) {
+  function saveCard(card, entry, intendedTitle) {
     const index = cardIndex(card);
     if (index < 0) return null;
     const current = cards[index] || card;
-    const keys = textOf(current.keys).trim() ? textOf(current.keys) : titleOf(current);
-    return updateCardAt(index, keys, entry, settings.CARD_TYPE);
+    const logicalTitle = line(intendedTitle || titleOf(current), 220);
+    if (!logicalTitle) return null;
+    return updateCardAt(
+      index,
+      managedCardKey(logicalTitle),
+      entry,
+      settings.CARD_TYPE,
+      logicalTitle
+    );
   }
 
   function addCard(title, entry) {
     const cardTitle = line(title, 220);
     if (!cardTitle) return null;
+    const cardKey = managedCardKey(cardTitle);
+    const existing = cards.find(card => textOf(card && card.keys).trim() === cardKey)
+      || findCard(cardTitle);
+    if (existing) return restoreVisibleCardTitle(existing, cardTitle);
     const before = cards.length;
     let created = null;
     try {
       const result = addStoryCard(
-        cardTitle,
+        cardKey,
         typeof entry === "string" ? entry : "",
         settings.CARD_TYPE
       );
-      if (Number.isInteger(result)) created = cards[result - 1] || null;
-      else if (cards.length > before) created = cards[cards.length - 1];
-      else if (result === false) created = findCard(cardTitle);
+      created = cards.find(card => textOf(card && card.keys).trim() === cardKey) || null;
+      if (!created && Number.isInteger(result)) {
+        created = cards[result] || cards[result - 1] || null;
+      } else if (!created && cards.length > before) {
+        created = cards[cards.length - 1];
+      } else if (!created && result === false) {
+        created = findCard(cardTitle);
+      }
     } catch (error) {
       debug("Could not create " + cardTitle + ": " + error.message);
     }
-    return created || (cards.length > before ? cards[cards.length - 1] : null);
+    created = created || (cards.length > before ? cards[cards.length - 1] : null);
+    return restoreVisibleCardTitle(created, cardTitle);
   }
 
   function upsertCard(title, entry) {
@@ -463,6 +605,7 @@ function CharacterContinuity(hook, incomingText) {
     if (!card) {
       card = addCard(title, settingsTemplate());
     }
+    if (card) card = saveCard(card, entryOf(card), title) || card;
     const settingsUpgrade = ensureRelationshipSettings(card);
     card = settingsUpgrade.card || card;
     const source = card ? entryOf(card) : "";
@@ -521,7 +664,8 @@ function CharacterContinuity(hook, incomingText) {
   if (!runtime.enabled) return finish(originalText);
 
   function playerProfile() {
-    const card = findCard(settings.PLAYER_TITLE);
+    let card = findCard(settings.PLAYER_TITLE);
+    if (card) card = saveCard(card, entryOf(card), settings.PLAYER_TITLE) || card;
     const source = card ? entryOf(card) : "";
     const name = extractLine(source, "Name") || "the player";
     const raw = (extractLine(source, "Pronouns") || "they/them").split(/[\/|,;\s]+/).filter(Boolean);
@@ -750,13 +894,9 @@ function CharacterContinuity(hook, incomingText) {
     if (matching.length > 1) {
       activeRosterDiagnostics.push("Multiple CC — Active NPCs cards were found; only the first is authoritative.");
     }
-    if (textOf(card.type) !== settings.CARD_TYPE) {
-      const updated = updateCardAt(
-        cardIndex(card),
-        textOf(card.keys).trim() || settings.ACTIVE_NPCS_TITLE,
-        entryOf(card),
-        settings.CARD_TYPE
-      );
+    if (textOf(card.type) !== settings.CARD_TYPE
+      || !managedCardIdentityMatches(card, settings.ACTIVE_NPCS_TITLE)) {
+      const updated = saveCard(card, entryOf(card), settings.ACTIVE_NPCS_TITLE);
       if (updated) card = updated;
       else activeRosterDiagnostics.push("CC — Active NPCs could not be internalized as a Continuity card.");
     }
@@ -980,7 +1120,14 @@ function CharacterContinuity(hook, incomingText) {
     });
 
     return accepted.map(candidate => {
-      const { card: outerCard, index, name, source, duplicateCount } = candidate;
+      const { index, name, duplicateCount } = candidate;
+      let outerCard = candidate.card;
+      outerCard = saveCard(
+        outerCard,
+        entryOf(outerCard),
+        namedTitle(name, settings.OUTER_CHARACTER_LABEL)
+      ) || outerCard;
+      const source = entryOf(outerCard);
       const pronouns = parseOuterPronouns(source);
       const rawStartingStatus = extractLine(source, "Starting status");
       const parsedStartingStatus = normalizeCastStatus(rawStartingStatus, "");
@@ -1006,6 +1153,13 @@ function CharacterContinuity(hook, incomingText) {
               + " conflicting Inner cards; omitted Inner until only one remains."
           );
         }
+      }
+      if (innerCard) {
+        innerCard = saveCard(
+          innerCard,
+          entryOf(innerCard),
+          namedTitle(name, settings.INNER_CHARACTER_LABEL)
+        ) || innerCard;
       }
       const innerSource = innerCard ? entryOf(innerCard) : "";
       const innerProfile = innerCard ? buildInnerProfile(name, innerSource) : null;
@@ -2345,19 +2499,25 @@ function CharacterContinuity(hook, incomingText) {
     }
   }
 
-  function removeOnboardingMarker(card) {
+  function removeOnboardingMarker(card, intendedTitle) {
     if (!card || !onboardingMarkerPresent(entryOf(card))) return card;
     const entry = textOf(entryOf(card)).replace(/\r/g, "").split("\n")
       .filter(row => !/^[ \\t]*Onboarding[ \\t]*:[ \\t]*Pending[ \\t]*$/i.test(row))
       .join("\n");
-    return saveCard(card, entry);
+    return saveCard(card, entry, intendedTitle);
   }
 
   function finalizeReadyOnboardingTemplates() {
     characters.filter(character => character.onboardingGenerated && !character.onboardingPending)
       .forEach(character => {
-        const outerSaved = removeOnboardingMarker(character.outerCard);
-        const innerSaved = removeOnboardingMarker(character.innerCard);
+        const outerSaved = removeOnboardingMarker(
+          character.outerCard,
+          namedTitle(character.name, settings.OUTER_CHARACTER_LABEL)
+        );
+        const innerSaved = removeOnboardingMarker(
+          character.innerCard,
+          namedTitle(character.name, settings.INNER_CHARACTER_LABEL)
+        );
         if (outerSaved) character.outerCard = outerSaved;
         if (innerSaved) character.innerCard = innerSaved;
         if (outerSaved && innerSaved) {
@@ -2705,7 +2865,8 @@ function CharacterContinuity(hook, incomingText) {
       markViewDuplicates(activePages, store.diagnostics, character.name + " active Views");
       markViewDuplicates(buriedPages, store.diagnostics, character.name + " buried Views");
       activePages.concat(buriedPages).forEach(page => {
-        if (textOf(page.card.type) !== settings.CARD_TYPE) {
+        if (textOf(page.card.type) !== settings.CARD_TYPE
+          || !managedCardIdentityMatches(page.card, page.title)) {
           page.card = saveCard(page.card, entryOf(page.card)) || page.card;
         }
         page.records.forEach(record => { record.card = page.card; });
@@ -2919,7 +3080,7 @@ function CharacterContinuity(hook, incomingText) {
       }
       used.add(card);
       const index = cardIndex(card);
-      if (!updateCardAt(index, item.keys, item.entry, item.type)) restored = false;
+      if (!updateCardAt(index, item.keys, item.entry, item.type, item.title)) restored = false;
     });
     if (!removeCards(existing.filter(card => !used.has(card)))) restored = false;
     refreshViewsStore(false);
@@ -3041,6 +3202,7 @@ function CharacterContinuity(hook, incomingText) {
           }
           priorEntries.push({
             index: cardIndex(page.card),
+            title: page.title,
             entry: entryOf(page.card),
             keys: page.card.keys,
             type: page.card.type
@@ -3053,7 +3215,7 @@ function CharacterContinuity(hook, incomingText) {
       }
     } catch (error) {
       priorEntries.slice().reverse().forEach(item => {
-        updateCardAt(item.index, item.keys, item.entry, item.type);
+        updateCardAt(item.index, item.keys, item.entry, item.type, item.title);
       });
       removeCards(createdCards);
       refreshViewsStore(false);
@@ -3349,7 +3511,8 @@ function CharacterContinuity(hook, incomingText) {
       const counts = {};
       pages.forEach(page => { counts[page.page] = (counts[page.page] || 0) + 1; });
       pages.forEach(page => {
-        if (textOf(page.card.type) !== settings.CARD_TYPE) {
+        if (textOf(page.card.type) !== settings.CARD_TYPE
+          || !managedCardIdentityMatches(page.card, page.title)) {
           const saved = saveCard(page.card, entryOf(page.card));
           if (saved) {
             page.card = saved;
@@ -3436,7 +3599,7 @@ function CharacterContinuity(hook, incomingText) {
         return;
       }
       used.add(card);
-      if (!updateCardAt(cardIndex(card), item.keys, item.entry, item.type)) restored = false;
+      if (!updateCardAt(cardIndex(card), item.keys, item.entry, item.type, item.title)) restored = false;
     });
     if (!removeCards(existing.filter(card => !used.has(card)))) restored = false;
     refreshNamesStore();
@@ -3999,7 +4162,8 @@ function CharacterContinuity(hook, incomingText) {
       const pageCounts = {};
       pages.forEach(page => { pageCounts[page.page] = (pageCounts[page.page] || 0) + 1; });
       pages.forEach(page => {
-        if (textOf(page.card.type) !== settings.CARD_TYPE) {
+        if (textOf(page.card.type) !== settings.CARD_TYPE
+          || !managedCardIdentityMatches(page.card, page.title)) {
           const saved = saveCard(page.card, entryOf(page.card));
           if (saved) {
             page.card = saved;
@@ -4099,7 +4263,7 @@ function CharacterContinuity(hook, incomingText) {
         return;
       }
       used.add(card);
-      if (!updateCardAt(cardIndex(card), item.keys, item.entry, item.type)) restored = false;
+      if (!updateCardAt(cardIndex(card), item.keys, item.entry, item.type, item.title)) restored = false;
     });
     if (!removeCards(existing.filter(card => !used.has(card)))) restored = false;
     refreshRelationshipsStore();
@@ -4708,7 +4872,8 @@ function CharacterContinuity(hook, incomingText) {
         if (!page.safe && !page.duplicatePage) {
           store.diagnostics.push(page.title + " is noncanonical, malformed, or over 1,000 characters and was left unchanged.");
         }
-        if (internalize && textOf(page.card.type) !== settings.CARD_TYPE) {
+        if (internalize && (textOf(page.card.type) !== settings.CARD_TYPE
+          || !managedCardIdentityMatches(page.card, page.title))) {
           const saved = saveCard(page.card, entryOf(page.card));
           if (saved) {
             page.card = saved;
@@ -4785,7 +4950,7 @@ function CharacterContinuity(hook, incomingText) {
       }
       used.add(card);
       const index = cardIndex(card);
-      if (!updateCardAt(index, item.keys, item.entry, item.type)) restored = false;
+      if (!updateCardAt(index, item.keys, item.entry, item.type, item.title)) restored = false;
     });
     if (!removeCards(existing.filter(card => !used.has(card)))) restored = false;
     refreshExperiencesStore(false);
