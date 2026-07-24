@@ -1,5 +1,5 @@
 const CHARACTER_CONTINUITY_STABLE_SETTINGS = {
-  VERSION: "Character Continuity Stable v1.0.53",
+  VERSION: "Character Continuity Stable v1.0.58",
   OUTER_CHARACTER_LABEL: "Outer",
   INNER_CHARACTER_LABEL: "Inner",
   VIEWS_LABEL: "Views",
@@ -6716,13 +6716,6 @@ function CharacterContinuity(hook, incomingText) {
     return interpretations;
   }
 
-  const DERIVED_VIEW_DESTINATION_PATTERNS = {
-    Loves: /\b(?:love|loves|loved|loving|adore|adores|adored|adoring|cherish|cherishes|cherished|devoted|devotion|beloved)\b/i,
-    Likes: /\b(?:like|likes|liked|liking|admire|admires|admired|admiration|respect|respects|respected|appreciate|appreciates|appreciated|value|values|valued|fond|fondness|esteem|grateful|gratitude|approve|approves|approved)\b/i,
-    Neutrals: /\b(?:neutral|neutrality|indifferent|indifference|unmoved|no strong opinion|no opinion|neither likes? nor dislikes?)\b/i,
-    Dislikes: /\b(?:dislike|dislikes|disliked|disliking|resent|resents|resented|resentment|annoyed|annoyance|irritated|irritation|disapprove|disapproves|disapproved|aversion)\b/i,
-    Hates: /\b(?:hate|hates|hated|hating|despise|despises|despised|loathes?|loathed|detest|detests|detested|abhor|abhors|abhorred|contempt)\b/i
-  };
   const DERIVED_VIEW_BURIAL_PATTERN = /\b(?:forgot|forgets|forgotten|no longer remembers?|memory (?:of|about).{0,40}(?:faded|is gone|was gone)|ceased to remember)\b/i;
   const DERIVED_VIEW_RECOVERY_PATTERN = /\b(?:remembered|remembers|recalled|recalls|recognized|recognizes|memory returned|memories returned)\b/i;
   const DERIVED_VIEW_MAJOR_PATTERN = /\b(?:betrayal|betrayed|saved (?:his|her|their|the) life|life[- ]threatening|sacrificed|sacrifice|murdered|murder|abused|abuse|assaulted|assault|tortured|torture|married|marriage|divorced|divorce|death|died|severed ties|cut ties|irreparable|ruined everything)\b/i;
@@ -6741,10 +6734,6 @@ function CharacterContinuity(hook, incomingText) {
 
   function provenanceViewSemanticTexts(record) {
     if (!record) return [];
-    const rawTexts = storyLineageForSources((record.sourceIds || []).concat(record.storyEvidenceIds || []))
-      .map(evidenceForId)
-      .filter(Boolean)
-      .map(item => item.text);
     return unique([
       record.explanation,
       record.value,
@@ -6752,7 +6741,25 @@ function CharacterContinuity(hook, incomingText) {
       record.resultingValue,
       record.priorViewState,
       record.resultingViewState
-    ].concat(rawTexts), 2000).filter(Boolean);
+    ], 2000).filter(Boolean);
+  }
+
+  function provenanceViewOwnerTarget(record) {
+    if (!record) return null;
+    const owner = characters.find(character => character.key === record.ownerKey) || null;
+    const targetKey = normalizedTargetKey(record.targetKey);
+    if (!owner || !targetKey) return null;
+    if (targetKey === "self") {
+      return { owner, target: { key: "self", name: owner.name } };
+    }
+    if (targetKey === "player") {
+      return { owner, target: { key: "player", name: player.name } };
+    }
+    if (targetKey.startsWith("npc:")) {
+      const character = characters.find(item => "npc:" + item.key === targetKey) || null;
+      if (character) return { owner, target: { key: targetKey, name: character.name } };
+    }
+    return null;
   }
 
   function derivedViewDestinationSupported(record, destination) {
@@ -6760,8 +6767,29 @@ function CharacterContinuity(hook, incomingText) {
     const source = provenanceViewSemanticTexts(record).join(" ");
     if (!normalizedDestination || !source) return false;
     if (VIEW_CATEGORIES.includes(normalizedDestination)) {
-      const pattern = DERIVED_VIEW_DESTINATION_PATTERNS[normalizedDestination];
-      return !!(pattern && pattern.test(source));
+      const identities = provenanceViewOwnerTarget(record);
+      if (!identities) return false;
+      const explicit = explicitViewSignal(identities.owner, identities.target, {
+        item: { id: record.id, text: source },
+        viewEligible: true
+      });
+      if (explicit && explicit.destination === normalizedDestination) return true;
+      if (normalizedDestination !== "Neutrals") return false;
+      const neutralThirdPerson = ownerTargetSentenceMatches(
+        identities.owner,
+        identities.target,
+        source,
+        "\\b(?:is|was|became|remained|felt|feels)\\s+(?:emotionally\\s+)?(?:neutral|indifferent|unmoved)\\b|\\b(?:has|had)\\s+no\\s+(?:strong\\s+)?opinion\\b"
+      );
+      const neutralFirstPerson = operationTargetAliases(identities.owner, identities.target)
+        .some(alias => {
+          const wanted = operationAliasRegExp(alias);
+          return !!wanted && ownerSpeechAttributed(identities.owner, source, new RegExp(
+            "\\bi\\s+(?:feel\\s+)?(?:neutral|indifferent|nothing)\\s+(?:about|toward|towards|for)\\s+" + wanted + "\\b",
+            "i"
+          ));
+        });
+      return neutralThirdPerson || neutralFirstPerson;
     }
     if (normalizedDestination === "Buried") return DERIVED_VIEW_BURIAL_PATTERN.test(source);
     if (normalizedDestination === "Recovered") return DERIVED_VIEW_RECOVERY_PATTERN.test(source);
@@ -7087,7 +7115,12 @@ function CharacterContinuity(hook, incomingText) {
     const source = textOf(item.text);
     const ownerMentioned = operationOwnerMentioned(owner, source);
     const current = item.id === currentInputId || (item.source === "story" && anchorInText(item.anchor, recent));
-    if (!ownerMentioned || !current) return null;
+    const focusedSoloOwner = current
+      && CC.focusKey === owner.key
+      && Array.isArray(CC.activeKeys)
+      && CC.activeKeys.length === 1
+      && CC.activeKeys[0] === owner.key;
+    if ((!ownerMentioned && !focusedSoloOwner) || !current) return null;
 
     const dangerPattern = "\\b(?:danger|threat|threatens?|attack(?:s|ed)?|ambush|explosion|fire|flames?|collaps(?:e|es|ed|ing)|falling beam|beam (?:falls|fell)|crash(?:es|ed|ing)?|lung(?:e|es|ed|ing)|weapon|blade|gun|arrow|injured|bleeding|trapped|poisoned|drowning)\\b";
     const emotionPredicate = "\\b(?:(?:looks?|seems?|appears?|feels?|became|turns?)\\s+(?:visibly |suddenly )?(?:afraid|angry|anxious|ashamed|confused|devastated|frightened|furious|grieving|hopeful|hurt|relieved|shocked|stunned|terrified|uncertain|upset|worried)|flinches?|freezes?|gasps?|recoils?|trembles?|hesitates?|stiffens?|breaks down|bursts into tears)\\b";
@@ -7118,35 +7151,63 @@ function CharacterContinuity(hook, incomingText) {
     const npc = CC.npcs[owner.key];
     const currentState = normalizeState(npc && npc.state, CC.stateClock);
     const baselineState = !categories.length && !currentState.situation.value;
+    const currentSituationTargetKey = normalizedTargetKey(
+      currentState.situation.targetKey || currentState.target.key
+    );
+    const currentSituationTarget = currentSituationTargetKey
+      ? (Array.isArray(targets) ? targets : []).find(target =>
+        normalizedTargetKey(target && target.key) === currentSituationTargetKey
+      ) || null
+      : null;
+    const continuationSource = currentSituationTarget
+      ? source + " " + modelTargetName(currentSituationTarget.key, currentSituationTarget.name)
+      : source;
+    const confirmationState = !categories.length
+      && !!currentState.situation.value
+      && !!currentSituationTarget
+      && experienceSituationMentioned(
+        { situation: currentState.situation.value },
+        continuationSource
+      );
 
-    if (!categories.length && !baselineState) return null;
+    if (!categories.length && !baselineState && !confirmationState) return null;
 
     let targetKey = "self";
-    const mentioned = (Array.isArray(targets) ? targets : [])
-      .filter(target => target.key !== "self" && operationTargetMentioned(owner, target, source));
-    if (mentioned.length === 1) targetKey = mentioned[0].key;
-    else {
-      const actingTarget = mentioned.length > 1
-        ? stateActingTarget(owner, mentioned, source)
-        : null;
-      if (actingTarget) targetKey = actingTarget.key;
-      else if ((item.source === "input" || item.source === "opening")
-        && (Array.isArray(targets) ? targets : []).some(target => target.key === "player")) {
-        targetKey = "player";
+    if (confirmationState) {
+      targetKey = currentSituationTarget.key;
+    } else {
+      const mentioned = (Array.isArray(targets) ? targets : [])
+        .filter(target => target.key !== "self" && operationTargetMentioned(owner, target, source));
+      if (mentioned.length === 1) targetKey = mentioned[0].key;
+      else {
+        const actingTarget = mentioned.length > 1
+          ? stateActingTarget(owner, mentioned, source)
+          : null;
+        if (actingTarget) targetKey = actingTarget.key;
+        else if ((item.source === "input" || item.source === "opening")
+          && (Array.isArray(targets) ? targets : []).some(target => target.key === "player")) {
+          targetKey = "player";
+        }
       }
     }
     return {
-    kind: "state",
-    targetKey,
-    field: "",
-    destination: "",
-    gain: baselineState
-    ? settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN
-    : settings.OPERATION_POINTS.STRONG_STATE_GAIN,
-    direct: false,
-    reason: baselineState
-    ? "Current scene participation supports an initial State in " + item.id + "."
-    : "Strong current State signal (" + categories.join(", ") + ") in " + item.id + "."
+      kind: "state",
+      targetKey,
+      field: "",
+      destination: "",
+      stateMode: confirmationState ? "confirm" : (baselineState ? "baseline" : "strong"),
+      confirmSituation: confirmationState ? currentState.situation.value : "",
+      gain: baselineState
+        ? settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN
+        : (confirmationState
+          ? settings.OPERATION_POINTS.STATE_CONFIRMATION_GAIN
+          : settings.OPERATION_POINTS.STRONG_STATE_GAIN),
+      direct: false,
+      reason: baselineState
+        ? "Current scene participation supports an initial State in " + item.id + "."
+        : (confirmationState
+          ? "Fresh evidence continues the active Situation in " + item.id + "."
+          : "Strong current State signal (" + categories.join(", ") + ") in " + item.id + ".")
     };
   }
 
@@ -7368,9 +7429,13 @@ function CharacterContinuity(hook, incomingText) {
         gain = Math.min(settings.OPERATION_POINTS.EXPLICIT_DIRECT_GAIN,
           contributing.length * settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN);
       } else if (kind === "state") {
-        contributing = entries.slice().sort((left, right) => right.relevance - left.relevance || left.item.number - right.item.number).slice(0, 2);
-        gain = settings.OPERATION_POINTS.STRONG_STATE_GAIN
-          + (contributing.length > 1 ? settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN : 0);
+        contributing = entries.slice().sort((left, right) => right.signal.gain - left.signal.gain
+          || right.relevance - left.relevance || left.item.number - right.item.number).slice(0, 2);
+        gain = Math.min(
+          settings.OPERATION_POINTS.STRONG_STATE_GAIN + settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN,
+          Math.max(0, Number(best.signal.gain) || 0)
+            + (contributing.length > 1 ? settings.OPERATION_POINTS.SUPPORTING_EVIDENCE_GAIN : 0)
+        );
       } else if (kind === "relationship") {
         contributing = entries.slice().sort((left, right) => right.signal.gain - left.signal.gain
           || Number(right.signal.direct) - Number(left.signal.direct)
@@ -7421,6 +7486,10 @@ function CharacterContinuity(hook, incomingText) {
         targetKey: best.signal.targetKey || "",
         field: best.signal.field || "",
         destination: best.signal.destination || "",
+        stateMode: kind === "state" ? line(best.signal.stateMode, 40) : "",
+        confirmSituation: kind === "state"
+          ? line(best.signal.confirmSituation, settings.MAX_STATE_VALUE_CHARS)
+          : "",
         sourceIds: evidenceItems.map(item => item.id),
         storyEvidenceIds: unique(sourceCandidates.flatMap(source =>
           source && Array.isArray(source.rawLineage)
@@ -7881,12 +7950,37 @@ function CharacterContinuity(hook, incomingText) {
     ];
     let rules = [];
     if (normalized === "state") {
+      const state = normalizeState(CC.npcs[owner.key] && CC.npcs[owner.key].state, CC.stateClock);
+      const frozenConfirmation = keyOf(selectedCandidate && selectedCandidate.stateMode) === "confirm"
+        && !!line(selectedCandidate && selectedCandidate.confirmSituation, settings.MAX_STATE_VALUE_CHARS)
+        && normalizedTargetKey(selectedCandidate && selectedCandidate.targetKey) === normalizedTargetKey(target.key);
+      const currentSituation = situationPhrase(state.situation.value);
+      const currentSituationMatchesTarget = !!currentSituation
+        && normalizedTargetKey(state.situation.targetKey || state.target.key) === normalizedTargetKey(target.key);
+      const situationField = frozenConfirmation ? "KEEP" : "Situation";
+      const stateContinuityRules = frozenConfirmation
+        ? [
+          "Current accepted Situation for " + target.code + ": "
+            + line(selectedCandidate.confirmSituation, settings.MAX_STATE_VALUE_CHARS) + ".",
+          "The Situation field is the literal KEEP. KEEP confirms that supplied Current Situation verbatim."
+        ]
+        : (currentSituationMatchesTarget
+          ? [
+            "Current accepted Situation for " + target.code + ": " + currentSituation + ".",
+            "Copy that Situation exactly when the supplied evidence continues it; write a new clause when the evidence establishes a materially changed Situation."
+          ]
+          : []);
       rules = [
         "State operation — owner " + owner.name + ".",
         evidence,
         targetMap,
         evidenceChoice,
-        "Record: (CCO|S|" + target.code + "|" + evidenceField + "|TriggerList|Situation|Thought). The two routing fields immediately after CCO are the literal pair S|" + target.code + ". Use bare values in the last three fields. Complete TriggerList with 1-3 choices: " + TRIGGER_CODES.join(", ") + ". Situation is a character-voiced clause of at most 100 characters and keeps stable wording while current. Thought is direct first-person inner speech.",
+        ...stateContinuityRules,
+        "Record: (CCO|S|" + target.code + "|" + evidenceField + "|TriggerList|" + situationField
+          + "|Thought). The two routing fields immediately after CCO are the literal pair S|" + target.code
+          + ". Use bare values in the last three fields. Complete TriggerList with 1-3 choices: "
+          + TRIGGER_CODES.join(", ")
+          + ". A new Situation is a character-voiced clause of at most 100 characters. Thought is direct first-person inner speech.",
         ...commonEnding
       ];
     } else if (normalized === "name") {
@@ -8423,16 +8517,27 @@ function CharacterContinuity(hook, incomingText) {
       )
     );
     if (plan.opportunity && !CC.recoveryPending && selectedOperationKind && retryTaskText) {
-      selectedEvidence = operationEvidence.slice();
+      const retryEvidence = operationEvidence.slice();
       const retryWithinTaskBudget = estimateTokens(retryTaskText) <= settings.MAX_OPERATION_TASK_TOKENS;
-      const fit = retryWithinTaskBudget
-        ? fitOperationByEvictingOptionalContext(retryTaskText)
-        : { ok: false, reason: "operation task budget" };
-      if (fit.ok && selectedEvidence.length && targets.length) {
-        tail = retryTaskText;
-        taskDelivered = true;
-        operationTurnLimitActive = true;
-      } else taskDeferredReason = "The frozen operation-specific Retry packet did not fit safely.";
+      if (!retryWithinTaskBudget) {
+        taskDeferredReason = "The frozen Retry task exceeded the operation task budget.";
+      } else if (!targets.length) {
+        taskDeferredReason = "No legal target was available for the frozen Retry operation kind.";
+      } else if (!selectedTargetAvailable) {
+        taskDeferredReason = "The frozen Retry operation target was unavailable in the legal target map.";
+      } else if (!retryEvidence.length || requiredEvidence.length !== selectedSourceIds.length) {
+        taskDeferredReason = "The frozen Retry evidence is no longer available or eligible under the current rules.";
+      } else {
+        const fit = fitOperationByEvictingOptionalContext(retryTaskText);
+        if (fit.ok) {
+          selectedEvidence = retryEvidence;
+          tail = retryTaskText;
+          taskDelivered = true;
+          operationTurnLimitActive = true;
+        } else {
+          taskDeferredReason = "The frozen operation-specific Retry packet did not fit safely.";
+        }
+      }
     } else if (plan.opportunity && !CC.recoveryPending && selectedOperationKind
       && operationEvidence.length && targets.length && selectedTargetAvailable
       && requiredEvidence.length === selectedSourceIds.length) {
@@ -8631,6 +8736,10 @@ function CharacterContinuity(hook, incomingText) {
     return [
       /^<\/?SYSTEM>$/i,
       /^[.\-:]*\s*(?:State\s*:\s*(?:copy\s+)?\(CCO\|S\||\(CCO\|S\|AboutCode\|)/i,
+      /^[.\-:]*\s*Current accepted Situation for\s+[SPN]\d*\s*:/i,
+      /^[.\-:]*\s*The Situation field is the literal KEEP\b/i,
+      /^[.\-:]*\s*KEEP confirms that supplied Current Situation\b/i,
+      /^[.\-:]*\s*Copy that Situation exactly when the supplied evidence continues it\b/i,
       /^[.\-:]*\s*Copy AboutCode and evidence IDs from (?:the )?(?:supplied )?packets\b/i,
       /^[.\-:]*\s*(?:Use|Copy)\s+1\s*-\s*3\s+(?:of|triggers?|trigger codes?)(?:\s+from)?\s*:/i,
       /^[.\-:]*\s*Situation(?:\s+(?:is|names)|\s*:)\s+.*\b(?:owner|current event|event phrase)\b/i,
@@ -8803,11 +8912,47 @@ function CharacterContinuity(hook, incomingText) {
   }
 
   function parseTerminalCandidate(output, plan) {
-    const source = stripOperationInstructionEchoes(output, plan).text;
+    const strippedSource = stripOperationInstructionEchoes(output, plan).text;
+    const strippedLines = strippedSource.split("\n");
+    const originalCcoMarkers = strippedSource.match(/\(\s*CCO\b/gi) || [];
+    const originalShorthandMarkers = strippedSource.match(/\(\s*[SNRV]\s*\|/gi) || [];
+    const originalBareProtocolLines = strippedLines.filter(value =>
+      /^\s*(?:CCO|[SNRV])\s*\|/i.test(value)
+    );
+    const recoverableBareRecord = originalBareProtocolLines.length === 1
+      && originalCcoMarkers.length === 0
+      && originalShorthandMarkers.length === 0
+      && strippedLines[0] === strippedLines[0].trim()
+      && /^CCO\|[^()\r\n]*$/.test(strippedLines[0]);
+    let canonicalizedBareRecord = "";
+    let removedNumericAnnotation = "";
+    let source = strippedSource;
+    if (recoverableBareRecord) {
+      canonicalizedBareRecord = strippedLines[0];
+      let normalizedRecord = canonicalizedBareRecord;
+      const numericAnnotation = normalizedRecord.match(/\s+([+-]\d+)\s*$/);
+      if (numericAnnotation) {
+        removedNumericAnnotation = numericAnnotation[1];
+        normalizedRecord = normalizedRecord.slice(0, numericAnnotation.index).trimEnd();
+      }
+      source = "(" + normalizedRecord + ")"
+        + (strippedLines.length > 1 ? "\n" + strippedLines.slice(1).join("\n") : "");
+    }
+    const bareNormalizationNote = canonicalizedBareRecord
+      ? " Exact bare first-line CCO delimiters were canonicalized."
+        + (removedNumericAnnotation
+          ? " The terminal signed numeric annotation " + removedNumericAnnotation
+            + " was removed before validation; managed code owns numerical changes."
+          : "")
+      : "";
     const ccoMarkers = source.match(/\(\s*CCO\b/gi) || [];
     const shorthandMarkers = source.match(/\(\s*[SNRV]\s*\|/gi) || [];
-    const protocolLikeCount = ccoMarkers.length + shorthandMarkers.length;
+    const bareProtocolLines = source.split("\n").filter(value =>
+      /^\s*(?:CCO|[SNRV])\s*\|/i.test(value)
+    );
+    const protocolLikeCount = ccoMarkers.length + shorthandMarkers.length + bareProtocolLines.length;
     const stripLine = value => {
+      if (/^\s*(?:CCO|[SNRV])\s*\|/i.test(value)) return "";
       let result = value.replace(/\(\s*(?:CCO\b|[SNRV]\s*\|)[^()\r\n]*\)/gi, "");
       const leftover = result.search(/\(\s*(?:CCO\b|[SNRV]\s*\|)/i);
       if (leftover >= 0) result = result.slice(0, leftover);
@@ -8816,6 +8961,13 @@ function CharacterContinuity(hook, incomingText) {
     const story = source.split("\n").map(stripLine).join("\n").replace(/\n{3,}/g, "\n\n").trim();
     if (!protocolLikeCount) {
       return { story, candidate: null, malformed: false, hadProtocol: false, reason: "No CCO record", raw: "" };
+    }
+    if (bareProtocolLines.length) {
+      return {
+        story, candidate: null, malformed: true, hadProtocol: true,
+        reason: "A bare protocol-like record was stripped; a complete record begins with (CCO| and ends with ).",
+        raw: line(bareProtocolLines[0].trim(), 300)
+      };
     }
     if (shorthandMarkers.length) {
       return {
@@ -8833,6 +8985,7 @@ function CharacterContinuity(hook, incomingText) {
     const firstLineEnd = source.indexOf("\n");
     const firstLine = (firstLineEnd >= 0 ? source.slice(0, firstLineEnd) : source);
     const raw = firstLine.trim();
+    const reportedRaw = line(canonicalizedBareRecord || raw, 300);
     if (firstLine !== raw || !/^\(CCO\|[^()\r\n]*\)$/.test(raw)) {
       return {
         story, candidate: null, malformed: true, hadProtocol: true,
@@ -8901,11 +9054,12 @@ function CharacterContinuity(hook, incomingText) {
       }
       const stateLabelNormalized = triggerField.changed || situationField.changed || thoughtField.changed;
       const stateReason = parsedCcoReason("CCO State record parsed.", routing)
+        + bareNormalizationNote
         + (stateLabelNormalized
           ? " Exact position-matched State field labels were normalized to bare values."
           : "");
       return {
-        story, malformed: false, hadProtocol: true, reason: stateReason, raw: line(raw, 300),
+        story, malformed: false, hadProtocol: true, reason: stateReason, raw: reportedRaw,
         candidate: { kind: "state", targetCode, evidenceIds, triggers, situation, thought }
       };
     }
@@ -8932,7 +9086,9 @@ function CharacterContinuity(hook, incomingText) {
         return { story, candidate: null, malformed: true, hadProtocol: true, reason: "The Name CCO record used an invalid subject, alias, transition, permission, explanation, or reserved character.", raw: line(raw, 300) };
       }
       return {
-        story, malformed: false, hadProtocol: true, reason: parsedCcoReason("CCO Name record parsed.", routing), raw: line(raw, 300),
+        story, malformed: false, hadProtocol: true,
+        reason: parsedCcoReason("CCO Name record parsed.", routing) + bareNormalizationNote,
+        raw: reportedRaw,
         candidate: { kind: "name", subjectCode, evidenceIds, alias, transition, replacedAlias, useField, explanation }
       };
     }
@@ -8953,7 +9109,9 @@ function CharacterContinuity(hook, incomingText) {
         return { story, candidate: null, malformed: true, hadProtocol: true, reason: "The Relationship explanation was empty or used reserved record characters.", raw: line(raw, 300) };
       }
       return {
-        story, malformed: false, hadProtocol: true, reason: parsedCcoReason("CCO Relationship record parsed.", routing), raw: line(raw, 300),
+        story, malformed: false, hadProtocol: true,
+        reason: parsedCcoReason("CCO Relationship record parsed.", routing) + bareNormalizationNote,
+        raw: reportedRaw,
         candidate: {
           kind: "relationship", targetCode, evidenceIds, field, eventKind,
           destination: destination.label, explanation
@@ -8979,7 +9137,9 @@ function CharacterContinuity(hook, incomingText) {
         return { story, candidate: null, malformed: true, hadProtocol: true, reason: "The View explanation was empty or used reserved wrapper characters.", raw: line(raw, 300) };
       }
       return {
-        story, malformed: false, hadProtocol: true, reason: parsedCcoReason("CCO View record parsed.", routing), raw: line(raw, 300),
+        story, malformed: false, hadProtocol: true,
+        reason: parsedCcoReason("CCO View record parsed.", routing) + bareNormalizationNote,
+        raw: reportedRaw,
         candidate: { kind: "view", targetField, evidenceIds, destination, severity, explanation }
       };
     }
@@ -9067,22 +9227,47 @@ function CharacterContinuity(hook, incomingText) {
     const target = targetForCode(plan, candidate.targetCode);
     if (!target) return { ok: false, error: "State used an About code that was not authorized for this owner." };
     const storedTarget = { ...target, name: storedTargetName(target.key, target.name) };
+    const priorSituation = npc.state.situation;
     const triggers = triggerList(candidate.triggers);
     if (!triggers.length) return { ok: false, error: "State contained no supported triggers." };
-    const situation = situationPhrase(candidate.situation);
+    const selected = plan && plan.selectedCandidate && typeof plan.selectedCandidate === "object"
+      ? plan.selectedCandidate
+      : {};
+    const frozenConfirmationSituation = situationPhrase(selected.confirmSituation);
+    const frozenConfirmation = keyOf(selected.stateMode) === "confirm"
+      && !!frozenConfirmationSituation
+      && normalizedTargetKey(selected.targetKey) === normalizedTargetKey(target.key);
+    const suppliedSituation = situationPhrase(candidate.situation);
+    const requestedKeep = keyOf(suppliedSituation) === "keep";
+    if (frozenConfirmation) {
+      const suppliedCurrent = requestedKeep
+        || keyOf(suppliedSituation) === keyOf(frozenConfirmationSituation);
+      if (!suppliedCurrent) {
+        return { ok: false, error: "The frozen State confirmation required KEEP or the exact supplied Current Situation." };
+      }
+      if (!priorSituation.value
+        || keyOf(priorSituation.value) !== keyOf(frozenConfirmationSituation)
+        || normalizedTargetKey(priorSituation.targetKey) !== normalizedTargetKey(target.key)) {
+        return { ok: false, error: "The frozen State confirmation no longer matched the active Situation and About target." };
+      }
+    } else if (requestedKeep) {
+      return { ok: false, error: "KEEP was available only for a frozen State confirmation." };
+    }
+    const situation = frozenConfirmation ? priorSituation.value : suppliedSituation;
     if (!situation || /[{}|\r\n]/.test(situation)) {
       return { ok: false, error: "State contained no complete safe Situation phrase." };
     }
     const thought = line(candidate.thought, settings.MAX_STATE_VALUE_CHARS);
     const validThought = directPrivateThought(thought, owner);
-    const groundingError = validThought ? targetGroundingError(candidate, target, plan) : "";
+    const groundingError = validThought
+      ? targetGroundingError({ ...candidate, situation }, target, plan)
+      : "";
     if (groundingError) return { ok: false, error: groundingError };
 
     const citedIds = unique((Array.isArray(evidenceItems) ? evidenceItems : []).map(item => item && item.id), 20)
       .map(value => value.toUpperCase())
       .filter(value => /^E\d+$/.test(value));
     if (!citedIds.length) return { ok: false, error: "State Situation confirmation lacked completed evidence." };
-    const priorSituation = npc.state.situation;
     const sameSituation = keyOf(priorSituation.value) === keyOf(situation)
       && normalizedTargetKey(priorSituation.targetKey) === normalizedTargetKey(target.key);
     const novelIds = citedIds.filter(id => !priorSituation.evidenceIds.includes(id));
@@ -11045,19 +11230,19 @@ function CharacterContinuity(hook, incomingText) {
         reason: derived ? candidate.eligibilityReason || "" : ""
       };
     });
-    plan.sourcePacket = plan.retry && Array.isArray(plan.retrySourcePacket) && plan.retrySourcePacket.length
-      ? clone(plan.retrySourcePacket)
-      : freshSourcePacket;
-    plan.sourcePacketText = plan.retry && textOf(plan.retrySourcePacketText)
-      ? textOf(plan.retrySourcePacketText)
-      : evidencePacketForKind(
-        focus,
-        attempt.taskKind,
-        attempt.evidenceCandidates || [],
-        plan.inputEvidenceId || "",
-        recent,
-        attempt.targets[0] || null
-      );
+    plan.sourcePacket = attempt.taskDelivered ? freshSourcePacket : [];
+    plan.sourcePacketText = attempt.taskDelivered
+      ? (plan.retry && textOf(plan.retrySourcePacketText)
+        ? textOf(plan.retrySourcePacketText)
+        : evidencePacketForKind(
+          focus,
+          attempt.taskKind,
+          attempt.evidenceCandidates || [],
+          plan.inputEvidenceId || "",
+          recent,
+          attempt.targets[0] || null
+        ))
+      : "";
     plan.sourcePacketTokens = estimateTokens(plan.sourcePacketText);
     plan.activeKeys = active.map(character => character.key);
     plan.modelActiveKeys = attempt.modelActive.map(character => character.key);
